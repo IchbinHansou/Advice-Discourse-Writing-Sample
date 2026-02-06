@@ -1,0 +1,63 @@
+import json
+from pathlib import Path
+import pandas as pd
+
+ROOT = Path(__file__).resolve().parents[1]
+DATA = ROOT / "data_new"
+
+GOLD_XLSX = DATA / "gold_to_annotate_V5_final.xlsx"
+SILVER_IDS = DATA / "silver_ids.csv"
+SILVER_TRAIN = DATA / "silver_train.csv"
+SAMPLING_LOG = DATA / "sampling_log_silver.json"
+
+OUT_JSON = DATA / "splits_v5.json"
+OUT_GOLD_IDS = DATA / "gold_ids_v5.csv"
+
+def main():
+    gold = pd.read_excel(GOLD_XLSX)
+    if "doc_id" not in gold.columns:
+        raise ValueError("gold file missing doc_id column")
+    gold_ids = gold[["doc_id"]].astype(str).drop_duplicates()
+    gold_ids.to_csv(OUT_GOLD_IDS, index=False, encoding="utf-8-sig")
+
+    silver_ids = pd.read_csv(SILVER_IDS, dtype={"doc_id": "string"})
+    if "doc_id" not in silver_ids.columns:
+        raise ValueError("silver_ids missing doc_id column")
+
+    gset = set(gold_ids["doc_id"].astype(str))
+    sset = set(silver_ids["doc_id"].astype(str))
+    overlap = sorted(gset & sset)
+    if overlap:
+        raise ValueError(f"gold/silver overlap found: {len(overlap)} examples (show 5): {overlap[:5]}")
+
+    # optional sanity check: silver_train should match silver_ids size
+    if SILVER_TRAIN.exists():
+        trn = pd.read_csv(SILVER_TRAIN, dtype={"doc_id": "string"})
+        print("silver_train rows:", len(trn), "unique:", trn["doc_id"].nunique())
+
+    info = {
+        "version": "v5",
+        "gold": {
+            "path": str(GOLD_XLSX.name),
+            "export_csv": "gold_labeled_300.csv",
+            "ids_csv": str(OUT_GOLD_IDS.name),
+            "n": int(len(gold)),
+        },
+        "silver": {
+            "ids_csv": str(SILVER_IDS.name),
+            "train_csv": str(SILVER_TRAIN.name),
+            "n_ids": int(len(silver_ids)),
+        },
+        "checks": {
+            "gold_unique": int(gold["doc_id"].astype(str).nunique()),
+            "silver_unique": int(silver_ids["doc_id"].astype(str).nunique()),
+            "gold_silver_overlap": 0,
+        },
+        "sampling_log": str(SAMPLING_LOG.name) if SAMPLING_LOG.exists() else None,
+    }
+
+    OUT_JSON.write_text(json.dumps(info, ensure_ascii=False, indent=2), encoding="utf-8")
+    print("Wrote:", OUT_JSON)
+
+if __name__ == "__main__":
+    main()

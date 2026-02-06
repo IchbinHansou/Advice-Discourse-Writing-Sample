@@ -1,0 +1,68 @@
+{
+  "timestamp": "2026-02-05T19:31:48",
+  "model": "TFIDF(word 1-3)+LogReg",
+  "tfidf_params": {
+    "lowercase": true,
+    "stop_words": "english",
+    "ngram_range": [
+      1,
+      3
+    ],
+    "min_df": 3,
+    "max_df": 0.95
+  },
+  "lr_params": {
+    "max_iter": 2000,
+    "random_state": 1004
+  },
+  "results": {
+    "RAW": {
+      "tag": "RAW",
+      "train_n": 1630,
+      "test_n_binary": 278,
+      "macro_f1": 0.6139840901127707,
+      "label_counts_test": {
+        "ADVICE": 147,
+        "STORY": 131
+      },
+      "confusion_matrix_labels": [
+        "ADVICE",
+        "STORY"
+      ],
+      "confusion_matrix": [
+        [
+          93,
+          54
+        ],
+        [
+          53,
+          78
+        ]
+      ]
+    },
+    "CLEANED_v1": {
+      "tag": "CLEANED_v1",
+      "train_n": 1630,
+      "test_n_binary": 278,
+      "macro_f1": 0.627370092266049,
+      "label_counts_test": {
+        "ADVICE": 147,
+        "STORY": 131
+      },
+      "confusion_matrix_labels": [
+        "ADVICE",
+        "STORY"
+      ],
+      "confusion_matrix": [
+        [
+          98,
+          49
+        ],
+        [
+          54,
+          77
+        ]
+      ]
+    }
+  }
+}

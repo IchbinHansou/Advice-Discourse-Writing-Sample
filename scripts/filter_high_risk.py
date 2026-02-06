@@ -1,0 +1,237 @@
+from pathlib import Path
+
+# scripts/ 目录
+HERE = Path(__file__).resolve().parent
+
+# 项目根目录（scripts 的上一级）
+ROOT = HERE.parent
+
+# 数据目录（根目录下的 data_new）
+DATA_DIR = ROOT / "data_new"
+
+import pandas as pd
+import re
+
+# ========= CONFIG =========
+INP = DATA_DIR / "dataset_raw_submissions_only.csv"
+OUT_SAFE = DATA_DIR / "dataset_safe_with_RAWNORM_and_CLEANv1.csv"
+OUT_LOG = DATA_DIR / "high_risk_log.csv"
+
+HARD_QTY = 50     # >=50 pills => hard delete
+SOFT_QTY = 10     # 10-49 pills => delete only if self-harm context
+WINDOW = 180      # for minor + general sex co-occurrence
+# ==========================
+
+def ensure_text(df: pd.DataFrame) -> pd.DataFrame:
+    if "doc_id" not in df.columns:
+        raise ValueError("Missing column: doc_id")
+    if "domain" not in df.columns:
+        raise ValueError("Missing column: domain")
+
+    if "source_subreddit" not in df.columns:
+        for c in ["subreddit", "sub", "source", "community"]:
+            if c in df.columns:
+                df = df.rename(columns={c: "source_subreddit"})
+                break
+        if "source_subreddit" not in df.columns:
+            df["source_subreddit"] = ""
+
+    if "text" not in df.columns:
+        title = df["title"] if "title" in df.columns else ""
+        body = None
+        for bc in ["body", "selftext", "post", "content", "text_body"]:
+            if bc in df.columns:
+                body = df[bc]
+                break
+        if body is None:
+            body = ""
+        df["title"] = title if isinstance(title, pd.Series) else ""
+        df["body"] = body if isinstance(body, pd.Series) else ""
+        df["text"] = df["title"].astype(str).fillna("") + "\n\n" + df["body"].astype(str).fillna("")
+
+    df["doc_id"] = df["doc_id"].astype(str)
+    df["domain"] = df["domain"].astype(str)
+    df["source_subreddit"] = df["source_subreddit"].astype(str)
+    df["text"] = df["text"].astype(str)
+    return df
+
+def window_cooccur(text_lc: str, pat_a: re.Pattern, pat_b: re.Pattern, window: int = 180) -> bool:
+    for ma in pat_a.finditer(text_lc):
+        left = max(0, ma.start() - window)
+        right = min(len(text_lc), ma.end() + window)
+        if pat_b.search(text_lc[left:right]):
+            return True
+    return False
+
+# ---- core risk patterns ----
+P_MED_MENTION = re.compile(r"\b(prescribed|prescription|meds?|medication|milligrams|mg)\b", re.IGNORECASE)
+
+P_SELFHARM = re.compile(
+    r"\b("
+    r"suicide|kill myself|end my life|want to die|"
+    r"self[-\s]?harm|self[-\s]?hurt|cut myself|"
+    r"attempt(ed)? suicide"
+    r")\b", re.IGNORECASE
+)
+
+P_OVERDOSE_WORD = re.compile(r"\b(overdose|overdosed|od)\b", re.IGNORECASE)
+
+P_PILLS_ACTION = re.compile(
+    r"\b(took|swallowed|ingested|downed|ate)\b"
+    r".{0,80}?"
+    r"\b(\d{1,4}|dozens?|hundreds?|handful|whole bottle|entire bottle|a bottle)\b"
+    r".{0,40}?"
+    r"\b(pills?|tablets?|capsules?)\b",
+    re.IGNORECASE
+)
+
+# sexual violence always high risk
+P_SEX_VIOLENCE = re.compile(
+    r"\b(rape|raped|sexual assault|sexually assaulted|molest|molestation|grooming|coerced|forced sex)\b",
+    re.IGNORECASE
+)
+P_SEX_GENERAL = re.compile(
+    r"\b(sex|sexual|nude|hook\s*up|oral|porn|sleep\s*with)\b",
+    re.IGNORECASE
+)
+
+# minor indicators
+P_AGE_TAG = re.compile(r"\b(1[0-7]|[0-9])\s*([mf])\b", re.IGNORECASE)  # 13m, 14f
+P_AGE_YO = re.compile(r"\b(1[0-7]|[0-9])\s*(?:yo|yr|yrs|years?)\s*old\b", re.IGNORECASE)
+P_MINOR_WORD = re.compile(r"\b(minor|underage|child|kid|teen)\b", re.IGNORECASE)
+
+# ---- NEW: minor + pill misuse cues ----
+P_PILL_THEFT = re.compile(
+    r"\b(steal(ing)?\s+pills?|stole\s+pills?|stealing\s+pills?|"
+    r"couldn[’']t\s+stop\s+thinking\s+about\s+stealing\s+pills?)\b",
+    re.IGNORECASE
+)
+
+P_MISUSE_CUE = re.compile(
+    r"\b("
+    r"couldn[’']t stop thinking|can't stop thinking|can not stop thinking|"
+    r"urge|craving|low point|endanger myself|"
+    r"without permission|not prescribed|"
+    r"only regret.*caught|scared of being caught"
+    r")\b",
+    re.IGNORECASE
+)
+
+# optional: medication mention soft flag only
+P_MED_MENTION = re.compile(r"\b(prescribed|prescription|meds|medication|mg|milligrams)\b", re.IGNORECASE)
+
+def parse_qty(q: str):
+    q = q.lower().strip()
+    if q.isdigit():
+        return int(q)
+    if "hundred" in q:
+        return 200
+    if "dozen" in q:
+        return 24
+    if "handful" in q:
+        return 30
+    if "bottle" in q:
+        return 100
+    return None
+
+def overdose_high_risk(text_lc: str) -> bool:
+    if P_OVERDOSE_WORD.search(text_lc) or P_SELFHARM.search(text_lc):
+        return True
+    m = P_PILLS_ACTION.search(text_lc)
+    if not m:
+        return False
+    qty = parse_qty(m.group(2))
+    if qty is None:
+        return False
+    if qty >= HARD_QTY:
+        return True
+    if qty >= SOFT_QTY and P_SELFHARM.search(text_lc):
+        return True
+    return False
+
+def minor_sex_high_risk(text_lc: str) -> bool:
+    minor_indicator = (P_AGE_TAG.search(text_lc) or P_AGE_YO.search(text_lc) or P_MINOR_WORD.search(text_lc))
+    if not minor_indicator:
+        return False
+    if P_SEX_VIOLENCE.search(text_lc):
+        return True
+    # general sex: only when near minor indicator
+    if window_cooccur(text_lc, P_AGE_TAG, P_SEX_GENERAL, window=WINDOW):
+        return True
+    if window_cooccur(text_lc, P_AGE_YO, P_SEX_GENERAL, window=WINDOW):
+        return True
+    if window_cooccur(text_lc, P_MINOR_WORD, P_SEX_GENERAL, window=WINDOW):
+        return True
+    return False
+
+def minor_pill_misuse_high_risk(text_lc: str) -> bool:
+    # IMPORTANT: do NOT delete "minor + normal medication".
+    # Only delete when there are misuse cues (theft/urge/low point/etc.)
+    minor_indicator = (P_AGE_TAG.search(text_lc) or P_AGE_YO.search(text_lc) or P_MINOR_WORD.search(text_lc))
+    if not minor_indicator:
+        return False
+
+    pill_related = bool(P_PILL_THEFT.search(text_lc) or P_PILLS_ACTION.search(text_lc))
+    misuse_context = bool(P_PILL_THEFT.search(text_lc) or P_MISUSE_CUE.search(text_lc) or P_SELFHARM.search(text_lc))
+
+    return pill_related and misuse_context
+
+def detect_reasons(text_lc: str):
+    reasons = []
+    if P_SELFHARM.search(text_lc):
+        reasons.append("self_harm")
+    if overdose_high_risk(text_lc):
+        if "self_harm" not in reasons:
+            reasons.append("overdose_or_ingestion")
+    if P_SEX_VIOLENCE.search(text_lc):
+        reasons.append("sexual_violence")
+    if minor_sex_high_risk(text_lc):
+        reasons.append("minor_sexual_content")
+    if minor_pill_misuse_high_risk(text_lc):
+        reasons.append("minor_pill_misuse")
+    return reasons
+
+print("CWD:", Path.cwd())
+print("SCRIPT:", HERE)
+print("INP:", INP)
+print("INP exists:", INP.exists())
+
+def main():
+    df = pd.read_csv(str(INP), low_memory=False)
+    df = ensure_text(df)
+
+    text_lc = df["text"].str.lower().fillna("")
+    high_risk = []
+    reasons_col = []
+    med_flag = []
+
+    for t in text_lc.tolist():
+        rs = detect_reasons(t)
+        t = "" if t is None else str(t)   # <- 保底，避免 TypeError
+        high_risk.append(1 if rs else 0)
+        reasons_col.append(";".join(rs))
+        med_flag.append(1 if P_MED_MENTION.search(t) else 0)
+
+    df["high_risk"] = high_risk
+    df["risk_reason"] = reasons_col
+    df["medication_mention"] = med_flag
+
+    df_risk = df[df["high_risk"] == 1].copy()
+    df_safe = df[df["high_risk"] == 0].copy()
+
+    print("total rows:", len(df))
+    print("high_risk rows:", len(df_risk))
+    print("safe rows:", len(df_safe))
+    print("\nHigh-risk by reason (top 30):")
+    print(df_risk["risk_reason"].value_counts().head(30))
+    print("\nSafe by domain:")
+    print(df_safe["domain"].value_counts(dropna=False))
+
+    df_safe.to_csv(str(OUT_SAFE), index=False, encoding="utf-8-sig")
+    df_risk[["doc_id","domain","source_subreddit","risk_reason"]].to_csv(str(OUT_LOG), index=False, encoding="utf-8-sig")
+
+    print("\nWrote:", OUT_SAFE)
+    print("Wrote:", OUT_LOG)
+
+if __name__ == "__main__":
+    main()

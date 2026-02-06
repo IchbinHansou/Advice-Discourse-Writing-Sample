@@ -1,0 +1,325 @@
+from __future__ import annotations
+
+import argparse
+import json
+import re
+from pathlib import Path
+
+import joblib
+import numpy as np
+import pandas as pd
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import classification_report, f1_score
+from sklearn.pipeline import Pipeline
+
+
+def project_root() -> Path:
+    # .../Saarland Writing Sample/scripts/tfidf_dump_and_audit.py
+    # root = .../Saarland Writing Sample
+    return Path(__file__).resolve().parents[1]
+
+
+def load_regex_groups(regex_path: Path):
+    """
+    Parse regex_v1.txt like:
+      # --- group name ---
+      regex
+      regex
+    Returns list of (compiled_pattern, placeholder or None)
+    None means "remove"
+    """
+    group = None
+    items = []
+
+    def placeholder_for_group(g: str | None):
+        if not g:
+            return "<ARTIFACT>"
+        g_l = g.lower()
+        if "age/gender" in g_l or "age" in g_l and "gender" in g_l:
+            return "<AGE_GENDER>"
+        if "verdict" in g_l:
+            return "<AITA_VERDICT>"
+        if "aita" in g_l or "subreddit" in g_l:
+            return "<SUBREDDIT_TAG>"
+        if "throwaway" in g_l:
+            return "<THROWAWAY>"
+        if "section marker" in g_l or "section" in g_l:
+            return None  # remove markers like TL;DR / EDIT / UPDATE
+        return "<ARTIFACT>"
+
+    for raw in regex_path.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            m = re.match(r"^#\s*---\s*(.+?)\s*---\s*$", line)
+            if m:
+                group = m.group(1)
+            continue
+        ph = placeholder_for_group(group)
+        # allow inline (?m) etc; still add IGNORECASE for safety
+        pat = re.compile(line, flags=re.IGNORECASE | re.MULTILINE)
+        items.append((pat, ph))
+    return items
+
+
+def clean_text(s: str, regex_items) -> str:
+    if s is None:
+        return ""
+    t = s
+    for pat, ph in regex_items:
+        if ph is None:
+            t = pat.sub(" ", t)
+        else:
+            t = pat.sub(f" {ph} ", t)
+    # normalize whitespace
+    t = re.sub(r"\s+", " ", t).strip()
+    return t
+
+
+def read_gold(gold_path: Path) -> pd.DataFrame:
+    if gold_path.suffix.lower() in [".xlsx", ".xls"]:
+        df = pd.read_excel(gold_path)
+    else:
+        df = pd.read_csv(gold_path, low_memory=False)
+    return df
+
+
+def ensure_upper_labels(df: pd.DataFrame, col: str) -> pd.Series:
+    return df[col].astype(str).str.strip().str.upper()
+
+
+def train_pipeline(seed: int = 1004) -> Pipeline:
+    vec = TfidfVectorizer(
+        ngram_range=(1, 3),
+        min_df=3,
+        max_features=200000,
+    )
+    clf = LogisticRegression(
+        C=1.0,
+        max_iter=5000,
+        random_state=seed,
+        solver="liblinear",
+    )
+    return Pipeline([("tfidf", vec), ("clf", clf)])
+
+
+def top_features(pipeline: Pipeline, topk: int = 40) -> dict:
+    vec: TfidfVectorizer = pipeline.named_steps["tfidf"]
+    clf: LogisticRegression = pipeline.named_steps["clf"]
+
+    feats = vec.get_feature_names_out()
+    classes = list(clf.classes_)
+
+    # binary: coef_ is shape (1, n_features) and corresponds to classes_[1]
+    coef = clf.coef_[0]
+    pos_class = classes[1]
+    neg_class = classes[0]
+
+    idx_pos = np.argsort(coef)[::-1][:topk]
+    idx_neg = np.argsort(coef)[:topk]
+
+    def pack(idxs, sign_label):
+        return [
+            {"feature": str(feats[i]), "weight": float(coef[i]), "toward": sign_label}
+            for i in idxs
+        ]
+
+    return {
+        "classes": classes,
+        "positive_class": pos_class,
+        "negative_class": neg_class,
+        "top_toward_positive": pack(idx_pos, pos_class),
+        "top_toward_negative": pack(idx_neg, neg_class),
+    }
+
+
+def artifact_audit_on_features(features: list[str], regex_path: Path) -> dict:
+    """
+    Heuristic audit: count how many top features contain obvious artifact tokens.
+    (This is NOT perfect, but it’s a quick sanity check.)
+    """
+    tokens = []
+    txt = regex_path.read_text(encoding="utf-8", errors="replace").lower()
+    # extract some literal-ish tokens from your regex file (safe subset)
+    for w in ["aita", "wibta", "aitah", "amItheasshole".lower(), "yta", "nta", "esh", "nah", "info", "throwaway", "tldr", "tl;dr", "edit", "update"]:
+        if w in txt:
+            tokens.append(w.replace("tl;dr", "tldr"))
+
+    tokens = sorted(set(tokens))
+    feats_l = [f.lower() for f in features]
+
+    hit = {tok: 0 for tok in tokens}
+    for f in feats_l:
+        f_norm = f.replace(";", "").replace(":", "")
+        for tok in tokens:
+            if tok in f_norm:
+                hit[tok] += 1
+
+    total = len(features)
+    any_hit = sum(1 for f in feats_l if any(tok in f.replace(";", "").replace(":", "") for tok in tokens))
+
+    return {
+        "tokens_checked": tokens,
+        "total_features_checked": total,
+        "features_with_any_artifact_token": any_hit,
+        "ratio_with_any_artifact_token": (any_hit / total) if total else 0.0,
+        "hits_by_token": hit,
+    }
+
+
+def eval_and_save(
+    *,
+    condition_name: str,
+    pipe: Pipeline,
+    gold_df: pd.DataFrame,
+    silver_df: pd.DataFrame,
+    regex_items,
+    outdir: Path,
+    regex_path: Path,
+    text_col_gold: str,
+    label_col_gold: str,
+    text_col_silver: str,
+    label_col_silver: str,
+):
+    # train
+    X_train = silver_df[text_col_silver].astype(str)
+    y_train = ensure_upper_labels(silver_df, label_col_silver)
+
+    if condition_name != "raw":
+        X_train = X_train.map(lambda s: clean_text(s, regex_items))
+
+    pipe.fit(X_train, y_train)
+
+    # eval on gold (binary only)
+    gold = gold_df.copy()
+    gold[label_col_gold] = ensure_upper_labels(gold, label_col_gold)
+    gold = gold[gold[label_col_gold].isin(["ADVICE", "STORY"])].copy()
+
+    X_gold = gold[text_col_gold].astype(str)
+    if condition_name != "raw":
+        X_gold = X_gold.map(lambda s: clean_text(s, regex_items))
+
+    y_true = gold[label_col_gold].to_numpy()
+    y_pred = pipe.predict(X_gold)
+
+    macro = f1_score(y_true, y_pred, average="macro")
+    rep = classification_report(y_true, y_pred, digits=4)
+
+    # save preds
+    pred_path = outdir / f"preds_tfidf_{condition_name}_gold.csv"
+    out_preds = gold[["doc_id", "domain", "source_subreddit", label_col_gold, "text"]].copy()
+    out_preds["pred"] = y_pred
+    out_preds.to_csv(pred_path, index=False, encoding="utf-8")
+
+    # save report
+    report_path = outdir / f"tfidf_{condition_name}_report.txt"
+    report_path.write_text(
+        f"condition={condition_name}\nmacro_f1={macro:.6f}\n\n{rep}",
+        encoding="utf-8",
+        errors="replace",
+    )
+
+    # save model
+    model_path = outdir / f"model_tfidf_{condition_name}.joblib"
+    joblib.dump(pipe, model_path)
+
+    # top features + audit
+    tf = top_features(pipe, topk=50)
+    # flatten top features for audit
+    top_list = [d["feature"] for d in tf["top_toward_positive"]] + [d["feature"] for d in tf["top_toward_negative"]]
+    audit = artifact_audit_on_features(top_list, regex_path)
+
+    # write features
+    feat_json_path = outdir / f"tfidf_top_features_{condition_name}.json"
+    feat_json_path.write_text(json.dumps(tf, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    feat_csv_path = outdir / f"tfidf_top_features_{condition_name}.csv"
+    rows = tf["top_toward_positive"] + tf["top_toward_negative"]
+    pd.DataFrame(rows).to_csv(feat_csv_path, index=False, encoding="utf-8")
+
+    # return summary
+    return {
+        "condition": condition_name,
+        "macro_f1": float(macro),
+        "preds_csv": str(pred_path),
+        "report_txt": str(report_path),
+        "model_joblib": str(model_path),
+        "top_features_json": str(feat_json_path),
+        "top_features_csv": str(feat_csv_path),
+        "artifact_audit_top100": audit,
+    }
+
+
+def main():
+    root = project_root()
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--silver", default=str(root / "data_new" / "silver_train_raw_norm_FROZEN.csv"))
+    ap.add_argument("--gold", default=str(root / "data_new" / "gold_raw_norm_FROZEN.csv"))
+    ap.add_argument("--regex", default=str(root / "spec" / "regex_v1.txt"))
+    ap.add_argument("--outdir", default=str(root / "data_new"))
+    args = ap.parse_args()
+
+    silver_path = Path(args.silver)
+    gold_path = Path(args.gold)
+    regex_path = Path(args.regex)
+    outdir = Path(args.outdir)
+
+    outdir.mkdir(parents=True, exist_ok=True)
+
+    silver_df = pd.read_csv(silver_path, low_memory=False)
+    gold_df = read_gold(gold_path)
+
+    # required columns sanity
+    for c in ["doc_id", "domain", "text"]:
+        if c not in gold_df.columns:
+            raise ValueError(f"Gold missing column: {c}")
+    for c in ["text", "silver_label"]:
+        if c not in silver_df.columns:
+            raise ValueError(f"Silver missing column: {c}")
+
+    regex_items = load_regex_groups(regex_path)
+
+    seed = 1004
+    raw_pipe = train_pipeline(seed=seed)
+    clean_pipe = train_pipeline(seed=seed)
+
+    summary = {"seed": seed, "paths": {"root": str(root), "silver": str(silver_path), "gold": str(gold_path), "regex": str(regex_path)}}
+
+    s_raw = eval_and_save(
+        condition_name="raw",
+        pipe=raw_pipe,
+        gold_df=gold_df,
+        silver_df=silver_df,
+        regex_items=regex_items,
+        outdir=outdir,
+        regex_path=regex_path,
+        text_col_gold="text",
+        label_col_gold="gold_label",
+        text_col_silver="text",
+        label_col_silver="silver_label",
+    )
+    s_clean = eval_and_save(
+        condition_name="cleaned_v1",
+        pipe=clean_pipe,
+        gold_df=gold_df,
+        silver_df=silver_df,
+        regex_items=regex_items,
+        outdir=outdir,
+        regex_path=regex_path,
+        text_col_gold="text",
+        label_col_gold="gold_label",
+        text_col_silver="text",
+        label_col_silver="silver_label",
+    )
+
+    summary["raw"] = s_raw
+    summary["cleaned_v1"] = s_clean
+
+    out_summary = outdir / "tfidf_dump_and_audit_summary.json"
+    out_summary.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    print(f"Wrote: {out_summary}")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,82 @@
+{
+  "timestamp": "2026-02-05T20:21:39",
+  "model": "TFIDF(1-3)+LinearSVC",
+  "results": {
+    "RAW": {
+      "tag": "RAW",
+      "model": "TFIDF(1-3)+LinearSVC",
+      "train_n": 1630,
+      "test_n_binary": 278,
+      "macro_f1": 0.6243243243243244,
+      "domain_macro_f1": {
+        "aita": {
+          "n": 92,
+          "macro_f1": 0.3858477970627503
+        },
+        "confession": {
+          "n": 88,
+          "macro_f1": 0.4996446339729922
+        },
+        "ra": {
+          "n": 98,
+          "macro_f1": 0.5046089800773119
+        }
+      },
+      "sanity": {
+        "train_text_col": "text",
+        "gold_text_col": "text",
+        "artifact_doc_rate_gold": {
+          "aita": 0.2949640287769784,
+          "wibta": 0.03237410071942446,
+          "yta": 0.0035971223021582736,
+          "nta": 0.0035971223021582736,
+          "esh": 0.0,
+          "nah": 0.0,
+          "edit": 0.1079136690647482,
+          "update": 0.03237410071942446,
+          "tldr": 0.039568345323741004,
+          "throwaway": 0.007194244604316547
+        },
+        "vocab_size": 13113
+      }
+    },
+    "CLEANED": {
+      "tag": "CLEANED",
+      "model": "TFIDF(1-3)+LinearSVC",
+      "train_n": 1630,
+      "test_n_binary": 278,
+      "macro_f1": 0.6163020833333333,
+      "domain_macro_f1": {
+        "aita": {
+          "n": 92,
+          "macro_f1": 0.3963974710724084
+        },
+        "confession": {
+          "n": 88,
+          "macro_f1": 0.5071364046973803
+        },
+        "ra": {
+          "n": 98,
+          "macro_f1": 0.4431818181818182
+        }
+      },
+      "sanity": {
+        "train_text_col": "text",
+        "gold_text_col": "text",
+        "artifact_doc_rate_gold": {
+          "aita": 0.0,
+          "wibta": 0.0,
+          "yta": 0.0,
+          "nta": 0.0,
+          "esh": 0.0,
+          "nah": 0.0,
+          "edit": 0.0,
+          "update": 0.0,
+          "tldr": 0.0,
+          "throwaway": 0.007194244604316547
+        },
+        "vocab_size": 13159
+      }
+    }
+  }
+}

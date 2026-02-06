@@ -1,0 +1,166 @@
+import re
+import json
+from pathlib import Path
+from datetime import datetime
+import pandas as pd
+
+# ======================
+# paths
+# ======================
+HERE = Path(__file__).resolve().parent
+ROOT = HERE.parent
+DATA = ROOT / "data_new"
+
+IN_PATH = DATA / "dataset_raw_submissions_only_safe.csv"
+
+# 输出两个“可直接拿去做实验”的文件：一个 raw_norm，一个 clean
+OUT_RAW_NORM = DATA / "dataset_safe_RAW_NORM.csv"
+OUT_CLEAN    = DATA / "dataset_safe_CLEAN_v1.csv"
+
+# 额外输出一个“带两列”的大文件（可选，方便你 debug / join）
+OUT_BOTH     = DATA / "dataset_safe_with_RAWNORM_and_CLEANv1.csv"
+
+OUT_AUDIT = DATA / "cleaning_audit_v2.json"
+
+TEXT_COL = "text"
+ID_COL   = "doc_id"
+
+# ======================
+# 1) whitespace normalization：两边都做
+# ======================
+WS_RE = re.compile(r"\s+")
+
+def normalize_ws(s: str) -> str:
+    s = "" if s is None else str(s)
+    s = WS_RE.sub(" ", s)
+    return s.strip()
+
+# ======================
+# 2) artifact removal：只在 CLEAN 侧做
+#    注意：这里不要放 \s+ 归一化（已经在 normalize_ws 里做了）
+# ======================
+
+# AITA acronyms
+PAT_AITA = re.compile(r"\b(?:AITA|WIBTA|AITAH)\b", re.I)
+
+# verdict tokens
+PAT_VERDICT = re.compile(r"\b(?:YTA|NTA|ESH|NAH)\b", re.I)
+
+# TLDR / EDIT / UPDATE
+PAT_SECTION = re.compile(r"\b(?:TL;?DR|EDIT|UPDATE)\b", re.I)
+
+# bracket age-gender: [25F]
+PAT_AGE_GENDER_BRACKET = re.compile(r"\[\s*(?:1[3-9]|[2-7]\d|80)\s*[MF]\s*\]", re.I)
+
+# plain age-gender: 25f / 25F / 25 f
+PAT_AGE_GENDER_PLAIN = re.compile(r"(?i)(?<!\w)(?:1[3-9]|[2-7]\d|80)\s*[mf](?!\w)")
+
+RULES_MARKER = [
+    (PAT_AITA, " "),
+    (PAT_VERDICT, " "),
+    (PAT_SECTION, " "),
+    (PAT_AGE_GENDER_BRACKET, " <AGE_GENDER> "),
+    (PAT_AGE_GENDER_PLAIN,   " <AGE_GENDER> "),
+]
+
+def remove_artifacts(s: str) -> str:
+    s = "" if s is None else str(s)
+    for pat, rep in RULES_MARKER:
+        s = pat.sub(rep, s)
+    return s
+
+# ======================
+# markers audit（用来证明伪影确实被清掉）
+# ======================
+MARKERS = {
+    "aita_acronym": PAT_AITA,
+    "verdicts": PAT_VERDICT,
+    "tldr_edit_update": PAT_SECTION,
+    "age_gender_bracket": PAT_AGE_GENDER_BRACKET,
+    "age_gender_plain": PAT_AGE_GENDER_PLAIN,
+}
+
+def marker_rates(series: pd.Series) -> dict:
+    txt = series.fillna("").astype(str)
+    return {k: float(txt.str.contains(pat, regex=True, na=False).mean())
+            for k, pat in MARKERS.items()}
+
+# ======================
+# main
+# ======================
+def main():
+    df = pd.read_csv(IN_PATH, low_memory=False)
+
+    if TEXT_COL not in df.columns:
+        raise KeyError(f"Input missing column '{TEXT_COL}'. Got columns: {list(df.columns)}")
+
+    # 强制文本化
+    df[TEXT_COL] = df[TEXT_COL].fillna("").astype(str)
+
+    # 先做 raw_norm（两边都一样）
+    df["text_raw_norm"] = df[TEXT_COL].map(normalize_ws)
+
+    # 再做 clean：在 raw_norm 上去伪影，然后再 normalize 一次（确保替换后空白不乱）
+    df["text_clean_v1"] = df["text_raw_norm"].map(remove_artifacts).map(normalize_ws)
+
+    # ======================
+    # changed ratios：你以后论文里要汇报的是 marker_only 的变化
+    # ======================
+    changed_due_to_norm = float((df[TEXT_COL].values != df["text_raw_norm"].values).mean())
+    changed_due_to_marker = float((df["text_raw_norm"].values != df["text_clean_v1"].values).mean())
+
+    # empty checks
+    empty_raw_norm = float((df["text_raw_norm"].str.strip() == "").mean())
+    empty_clean = float((df["text_clean_v1"].str.strip() == "").mean())
+
+    audit = {
+        "timestamp": datetime.now().isoformat(timespec="seconds"),
+        "input": str(IN_PATH),
+        "n": int(len(df)),
+
+        # 关键：拆开报告
+        "changed_due_to_whitespace_norm": changed_due_to_norm,
+        "changed_due_to_artifact_removal": changed_due_to_marker,
+
+        "empty_ratio_raw_norm": empty_raw_norm,
+        "empty_ratio_clean": empty_clean,
+
+        # markers：在 raw_norm vs clean 上比（这样排除了空白的影响）
+        "marker_rates_raw_norm": marker_rates(df["text_raw_norm"]),
+        "marker_rates_clean": marker_rates(df["text_clean_v1"]),
+
+        "outputs": {
+            "raw_norm": str(OUT_RAW_NORM),
+            "clean_v1": str(OUT_CLEAN),
+            "both_cols": str(OUT_BOTH),
+        }
+    }
+
+    # ======================
+    # 输出文件：给你两个“直接拿去做实验”的版本
+    # ======================
+    df_raw = df.copy()
+    df_raw[TEXT_COL] = df_raw["text_raw_norm"]
+    df_raw.to_csv(OUT_RAW_NORM, index=False, encoding="utf-8-sig")
+
+    df_clean = df.copy()
+    df_clean[TEXT_COL] = df_clean["text_clean_v1"]
+    df_clean.to_csv(OUT_CLEAN, index=False, encoding="utf-8-sig")
+
+    # 输出带两列的版本（方便你 debug / join / 抽样时切换）
+    df.to_csv(OUT_BOTH, index=False, encoding="utf-8-sig")
+
+    OUT_AUDIT.write_text(json.dumps(audit, indent=2), encoding="utf-8")
+
+    print("Wrote:", OUT_RAW_NORM)
+    print("Wrote:", OUT_CLEAN)
+    print("Wrote:", OUT_BOTH)
+    print("Wrote:", OUT_AUDIT)
+    print()
+    print("[AUDIT] changed_due_to_whitespace_norm:", audit["changed_due_to_whitespace_norm"])
+    print("[AUDIT] changed_due_to_artifact_removal:", audit["changed_due_to_artifact_removal"])
+    print("[AUDIT] marker_rates_raw_norm:", audit["marker_rates_raw_norm"])
+    print("[AUDIT] marker_rates_clean:", audit["marker_rates_clean"])
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,178 @@
+import os
+import pandas as pd
+from sklearn.metrics import f1_score, classification_report, confusion_matrix
+
+from pathlib import Path
+HERE = Path(__file__).resolve().parent
+ROOT = HERE.parent
+DATA_DIR = os.path.join(ROOT, "data_new")
+
+GOLD_PATH = os.path.join(DATA_DIR, "gold_clean_v1_FROZEN.csv")
+PRED_CLEAN_PATH = os.path.join(DATA_DIR, "preds_features_clean_v1_aligned.csv")  # has pred_label
+PRED_RAW_PATH   = os.path.join(DATA_DIR, "preds_tfidf_raw_gold.csv")             # has pred
+
+LABELS = ["ADVICE", "STORY"]
+
+def norm_label(x):
+    if pd.isna(x): 
+        return None
+    x = str(x).strip().upper()
+    if x in ("A", "ADVICE"): return "ADVICE"
+    if x in ("S", "STORY"):  return "STORY"
+    return x
+
+def pick_merge_keys(df_left, df_right):
+    # 最优：doc_id
+    if "doc_id" in df_left.columns and "doc_id" in df_right.columns:
+        return ["doc_id"]
+    # 次优：domain + text_clean_v1
+    if "domain" in df_left.columns and "domain" in df_right.columns:
+        if "text_clean_v1" in df_left.columns and "text_clean_v1" in df_right.columns:
+            return ["domain", "text_clean_v1"]
+        if "text" in df_left.columns and "text" in df_right.columns:
+            return ["domain", "text"]
+    # 退化：只有 text_clean_v1 / text
+    if "text_clean_v1" in df_left.columns and "text_clean_v1" in df_right.columns:
+        return ["text_clean_v1"]
+    if "text" in df_left.columns and "text" in df_right.columns:
+        return ["text"]
+    raise ValueError("No safe merge key found (need doc_id or (domain+text*)).")
+
+def safe_merge(left, right, cols_to_add, how="left"):
+    keys = pick_merge_keys(left, right)
+    # 只取需要的列
+    r = right[keys + cols_to_add].copy()
+
+    # 去重：防止 join 膨胀
+    dup = r.duplicated(subset=keys, keep=False)
+    if dup.any():
+        n = int(dup.sum())
+        print(f"[WARN] Right table has {n} duplicate-key rows on {keys}. Dedup keep first.")
+        r = r.drop_duplicates(subset=keys, keep="first")
+
+    # 关键：避免 _x/_y，改用 _r
+    merged = left.merge(r, on=keys, how=how, suffixes=("", "_r"))
+
+    # 如果右表列因为冲突变成了 *_r，把它补回/或改回原名
+    for c in cols_to_add:
+        c_r = f"{c}_r"
+        if c_r in merged.columns:
+            if c in merged.columns:
+                merged[c] = merged[c].where(~merged[c].isna(), merged[c_r])
+                merged = merged.drop(columns=[c_r])
+            else:
+                merged = merged.rename(columns={c_r: c})
+
+        # 缺失率检查（列存在才检查）
+        if c in merged.columns:
+            missing = merged[c].isna().mean()
+            if missing > 0.05:
+                print(f"[WARN] Column {c} missing rate after merge: {missing:.1%} (keys={keys})")
+
+    return merged
+
+def eval_block(df, gold_col, pred_col, title):
+    tmp = df.copy()
+    tmp[gold_col] = tmp[gold_col].map(norm_label)
+    tmp[pred_col] = tmp[pred_col].map(norm_label)
+    tmp = tmp[tmp[gold_col].isin(LABELS) & tmp[pred_col].isin(LABELS)].copy()
+
+    if len(tmp) == 0:
+        print(f"[{title}] no valid rows for evaluation.")
+        return None
+
+    mf1 = f1_score(tmp[gold_col], tmp[pred_col], average="macro", labels=LABELS)
+    print(f"\n===== {title} =====")
+    print(f"n={len(tmp)} macro_f1={mf1:.4f}")
+    print(classification_report(tmp[gold_col], tmp[pred_col], labels=LABELS, digits=4))
+    print("Confusion (rows=true, cols=pred) [ADVICE, STORY]:")
+    print(confusion_matrix(tmp[gold_col], tmp[pred_col], labels=LABELS))
+
+    return mf1
+
+def per_domain_metrics(df, gold_col, pred_col):
+    rows = []
+    for d, g in df.groupby("domain"):
+        gg = g.copy()
+        gg[gold_col] = gg[gold_col].map(norm_label)
+        gg[pred_col] = gg[pred_col].map(norm_label)
+        gg = gg[gg[gold_col].isin(LABELS) & gg[pred_col].isin(LABELS)]
+        if len(gg) == 0:
+            continue
+        mf1 = f1_score(gg[gold_col], gg[pred_col], average="macro", labels=LABELS)
+        err = (gg[gold_col] != gg[pred_col]).mean()
+        rows.append({"domain": d, "n": len(gg), "macro_f1": mf1, "error_rate": err})
+    return pd.DataFrame(rows).sort_values(["macro_f1", "n"])
+
+def main():
+    gold = pd.read_csv(GOLD_PATH)
+    clean = pd.read_csv(PRED_CLEAN_PATH)
+    raw = pd.read_csv(PRED_RAW_PATH)
+
+    # 统一列名
+    if "pred" in raw.columns and "pred_label" not in raw.columns:
+        raw = raw.rename(columns={"pred": "pred_label"})
+    clean = clean.rename(columns={"pred_label": "pred_clean_v1"})
+    raw = raw.rename(columns={"pred_label": "pred_raw"})
+
+    # merge clean preds
+    merged = safe_merge(
+        gold, clean,
+        cols_to_add=[c for c in ["pred_clean_v1", "is_error", "text_tail", "category"] if c in clean.columns]
+    )
+
+    # merge raw preds
+    merged = safe_merge(
+        merged, raw,
+        cols_to_add=[c for c in ["pred_raw", "source_subreddit"] if c in raw.columns]
+    )
+
+    # 计算 is_error（以防 clean 文件里没带/或你想重算）
+    merged["gold_norm"] = merged["gold_label"].map(norm_label)
+    if "pred_clean_v1" in merged.columns:
+        merged["pred_clean_v1_norm"] = merged["pred_clean_v1"].map(norm_label)
+        merged["is_error_clean_v1"] = (merged["gold_norm"] != merged["pred_clean_v1_norm"])
+    if "pred_raw" in merged.columns:
+        merged["pred_raw_norm"] = merged["pred_raw"].map(norm_label)
+        merged["is_error_raw"] = (merged["gold_norm"] != merged["pred_raw_norm"])
+
+    out_path = os.path.join(DATA_DIR, "gold267_merged_preds_raw_clean.csv")
+    merged.to_csv(out_path, index=False, encoding="utf-8-sig")
+    print("\nSaved merged file:", out_path)
+
+    # overall eval
+    if "pred_raw" in merged.columns:
+        eval_block(merged, "gold_label", "pred_raw", "RAW (tfidf)")
+    if "pred_clean_v1" in merged.columns:
+        eval_block(merged, "gold_label", "pred_clean_v1", "CLEAN_v1 (aligned)")
+
+    # per-domain
+    if "pred_raw" in merged.columns:
+        dom_raw = per_domain_metrics(merged, "gold_label", "pred_raw")
+        dom_raw.to_csv(os.path.join(DATA_DIR, "domain_metrics_raw.csv"), index=False, encoding="utf-8-sig")
+        print("\nSaved:", os.path.join(DATA_DIR, "domain_metrics_raw.csv"))
+        print(dom_raw)
+
+    if "pred_clean_v1" in merged.columns:
+        dom_clean = per_domain_metrics(merged, "gold_label", "pred_clean_v1")
+        dom_clean.to_csv(os.path.join(DATA_DIR, "domain_metrics_clean_v1.csv"), index=False, encoding="utf-8-sig")
+        print("\nSaved:", os.path.join(DATA_DIR, "domain_metrics_clean_v1.csv"))
+        print(dom_clean)
+
+        # AITA 错误归因统计（如果有 category）
+        if "category" in merged.columns:
+            aita = merged[merged["domain"].astype(str).str.lower().eq("aita")].copy()
+            aita = aita[aita["gold_norm"].isin(LABELS) & aita["pred_clean_v1_norm"].isin(LABELS)]
+            if len(aita) > 0:
+                aita_err = aita[aita["gold_norm"] != aita["pred_clean_v1_norm"]]
+                breakdown = (aita_err["category"].fillna("UNK")
+                             .value_counts()
+                             .reset_index()
+                             .rename(columns={"index": "category", "category": "count"}))
+                breakdown_path = os.path.join(DATA_DIR, "aita_error_breakdown_clean_v1.csv")
+                breakdown.to_csv(breakdown_path, index=False, encoding="utf-8-sig")
+                print("\nSaved:", breakdown_path)
+                print(breakdown)
+
+if __name__ == "__main__":
+    main()

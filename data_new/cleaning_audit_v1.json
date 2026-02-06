@@ -1,0 +1,20 @@
+{
+  "timestamp": "2026-02-05T17:41:18",
+  "input": "C:\\Users\\PC\\OneDrive\\\u684c\u9762\\Saarland Writing Sample\\data_new\\dataset_raw_submissions_only_safe.csv",
+  "output": "C:\\Users\\PC\\OneDrive\\\u684c\u9762\\Saarland Writing Sample\\data_new\\dataset_raw_submissions_only_safe_with_clean_v1.csv",
+  "n": 357009,
+  "changed_ratio": 1.0,
+  "empty_ratio_cleaned": 0.0,
+  "marker_rates_raw": {
+    "aita_acronym": 0.08605385298409844,
+    "verdicts": 0.0028626729298140943,
+    "tldr_edit_update": 0.07932573128408528,
+    "age_gender_bracket": 0.002831861381645841
+  },
+  "marker_rates_clean": {
+    "aita_acronym": 0.0,
+    "verdicts": 0.0,
+    "tldr_edit_update": 0.0,
+    "age_gender_bracket": 0.0
+  }
+}

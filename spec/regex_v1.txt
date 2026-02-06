@@ -1,0 +1,39 @@
+# regex_version: v1
+# purpose: remove community artifacts & templated markers for raw vs cleaned comparison
+# note: version controlled via git; do not include calendar dates
+
+# --- AITA / subreddit tags ---
+\bAITA\b
+\bWIBTA\b
+\bAITAH\b
+\bAmItheAsshole\b
+(?i)\bam\s+i\s+the\s+asshole\b
+(?i)\bwould\s+i\s+be\s+the\s+asshole\b
+
+# --- verdict tokens ---
+\bYTA\b
+\bNTA\b
+\bESH\b
+\bNAH\b
+\bINFO\b
+
+# --- section markers ---
+(?m)^\s*TL;?DR[:\-]?\s*
+(?m)^\s*EDIT[:\-]?\s*
+(?m)^\s*UPDATE[:\-]?\s*
+
+# --- throwaway / boilerplate ---
+\bthrowaway\b
+
+# --- age/gender brackets like [25F], (30M) ---
+\(\s*\d{1,2}\s*[/\-]\s*[FfMm]\s*\)
+\(\s*[FfMm]\s*[/\-]\s*\d{1,2}\s*\)
+\[\s*\d{1,2}\s*[/\-]\s*[FfMm]\s*\]
+\[\s*[FfMm]\s*[/\-]\s*\d{1,2}\s*\]
+
+\{\s*\d{1,2}\s*[FfMm]\s*\}
+\{\s*[FfMm]\s*\d{1,2}\s*\}
+<\s*\d{1,2}\s*[FfMm]\s*>
+<\s*[FfMm]\s*\d{1,2}\s*>
+
+

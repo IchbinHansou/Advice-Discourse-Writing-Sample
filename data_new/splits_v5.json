@@ -1,0 +1,20 @@
+{
+  "version": "v5",
+  "gold": {
+    "path": "gold_to_annotate_V5_final.xlsx",
+    "export_csv": "gold_labeled_300.csv",
+    "ids_csv": "gold_ids_v5.csv",
+    "n": 300
+  },
+  "silver": {
+    "ids_csv": "silver_ids.csv",
+    "train_csv": "silver_train.csv",
+    "n_ids": 1630
+  },
+  "checks": {
+    "gold_unique": 300,
+    "silver_unique": 1630,
+    "gold_silver_overlap": 0
+  },
+  "sampling_log": "sampling_log_silver.json"
+}

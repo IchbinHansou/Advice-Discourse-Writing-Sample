@@ -1,0 +1,140 @@
+from pathlib import Path
+import json
+import pandas as pd
+import numpy as np
+
+from sklearn.pipeline import Pipeline
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.linear_model import LogisticRegression
+from sklearn.decomposition import TruncatedSVD
+from sklearn.preprocessing import Normalizer
+from sklearn.metrics import classification_report, f1_score
+
+SEED = 1004
+
+# ---------- Paths (ROOT-relative) ----------
+ROOT = Path(__file__).resolve().parents[1]
+DATA = ROOT / "data_new"
+
+SILVER_RAW   = DATA / "silver_train.csv"
+SILVER_CLEAN = DATA / "silver_train_clean_v1.csv"
+
+GOLD_RAW     = DATA / "gold_binary.csv"
+GOLD_CLEAN   = DATA / "gold_binary_clean_v1.csv"
+
+OUT_JSON     = DATA / "results_sanity_checks_binary_aligned.json"
+
+
+def eval_preds(y_true, y_pred, domains=None):
+    overall = {
+        "n": int(len(y_true)),
+        "macro_f1": float(f1_score(y_true, y_pred, average="macro")),
+        "report": classification_report(y_true, y_pred, output_dict=True, zero_division=0),
+    }
+    by_domain = None
+    if domains is not None:
+        by_domain = {}
+        domains = np.array(domains)
+        y_true = np.array(y_true)
+        y_pred = np.array(y_pred)
+        for d in sorted(set(domains)):
+            m = domains == d
+            by_domain[d] = {
+                "n": int(m.sum()),
+                "macro_f1": float(f1_score(y_true[m], y_pred[m], average="macro")),
+                "report": classification_report(y_true[m], y_pred[m], output_dict=True, zero_division=0),
+            }
+    return overall, by_domain
+
+
+def run_char_ngram(train_text, train_y, test_text, test_y, test_domains):
+    # fastText-like: char_wb ngrams + linear classifier (offline)
+    model = Pipeline([
+        ("tfidf", TfidfVectorizer(analyzer="char_wb", ngram_range=(3, 5), min_df=3, max_features=150000)),
+        ("clf", LogisticRegression(max_iter=2000, solver="liblinear", C=4.0, random_state=SEED)),
+    ])
+    model.fit(train_text, train_y)
+    pred = model.predict(test_text)
+    return eval_preds(test_y, pred, test_domains)
+
+
+def run_lsa_probe(train_text, train_y, test_text, test_y, test_domains):
+    # embedding probe (offline): TF-IDF -> SVD (LSA) -> linear probe
+    model = Pipeline([
+        ("tfidf", TfidfVectorizer(ngram_range=(1, 2), min_df=2, max_features=50000)),
+        ("svd", TruncatedSVD(n_components=200, random_state=SEED)),
+        ("norm", Normalizer(copy=False)),
+        ("clf", LogisticRegression(max_iter=2000, solver="liblinear", C=4.0, random_state=SEED)),
+    ])
+    model.fit(train_text, train_y)
+    pred = model.predict(test_text)
+    return eval_preds(test_y, pred, test_domains)
+
+
+def main():
+    # --- early file checks ---
+    for p in [SILVER_RAW, SILVER_CLEAN, GOLD_RAW, GOLD_CLEAN]:
+        if not p.exists():
+            raise FileNotFoundError(f"Missing file: {p}")
+
+    silver_raw = pd.read_csv(SILVER_RAW)
+    silver_clean = pd.read_csv(SILVER_CLEAN)
+    gold_raw = pd.read_csv(GOLD_RAW)
+    gold_clean = pd.read_csv(GOLD_CLEAN)
+
+    # --- quick protocol checks ---
+    print("gold_raw rows:", len(gold_raw))
+    print("gold_clean rows:", len(gold_clean))
+    print("\n gold_raw labels:\n", gold_raw["gold_label"].value_counts(dropna=False))
+    print("\n gold_clean labels:\n", gold_clean["gold_label"].value_counts(dropna=False))
+
+    # --- Run models ---
+    print("\n=== Running models (offline sanity checks) ===")
+
+    results = {}
+
+    # RAW
+    tr_text = silver_raw["text"].astype(str).tolist()
+    tr_y = silver_raw["silver_label"].astype(str).tolist()
+    te_text = gold_raw["text"].astype(str).tolist()
+    te_y = gold_raw["gold_label"].astype(str).tolist()
+    te_domain = gold_raw["domain"].astype(str).tolist() if "domain" in gold_raw.columns else None
+
+    o, d = run_char_ngram(tr_text, tr_y, te_text, te_y, te_domain)
+    results["char_ngram_raw"] = {"overall": o, "by_domain": d}
+
+    o, d = run_lsa_probe(tr_text, tr_y, te_text, te_y, te_domain)
+    results["lsa_probe_raw"] = {"overall": o, "by_domain": d}
+
+    # CLEAN (aligned binary)
+    tr_text = silver_clean["text_clean_v1"].astype(str).tolist()
+    tr_y = silver_clean["silver_label"].astype(str).tolist()
+    te_text = gold_clean["text_clean_v1"].astype(str).tolist()
+    te_y = gold_clean["gold_label"].astype(str).tolist()
+    te_domain = gold_clean["domain"].astype(str).tolist() if "domain" in gold_clean.columns else None
+
+    o, d = run_char_ngram(tr_text, tr_y, te_text, te_y, te_domain)
+    results["char_ngram_clean_v1_aligned"] = {"overall": o, "by_domain": d}
+
+    o, d = run_lsa_probe(tr_text, tr_y, te_text, te_y, te_domain)
+    results["lsa_probe_clean_v1_aligned"] = {"overall": o, "by_domain": d}
+
+    # Save
+    with open(OUT_JSON, "w", encoding="utf-8") as f:
+        json.dump(results, f, ensure_ascii=False, indent=2)
+
+    print("\nSaved:", OUT_JSON)
+
+    # Summary lines
+    def show(key):
+        o = results[key]["overall"]
+        print(f"{key:30s} macroF1={o['macro_f1']:.4f}  n={o['n']}")
+
+    show("char_ngram_raw")
+    show("lsa_probe_raw")
+    show("char_ngram_clean_v1_aligned")
+    show("lsa_probe_clean_v1_aligned")
+
+
+if __name__ == "__main__":
+    main()

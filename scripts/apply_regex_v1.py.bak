@@ -1,0 +1,197 @@
+import json
+import re
+from pathlib import Path
+from datetime import datetime
+import pandas as pd
+
+# -------------------------
+# Paths
+# -------------------------
+HERE = Path(__file__).resolve().parent
+ROOT = HERE.parent
+DATA = ROOT / "data_new"
+
+SILVER_IN = DATA / "silver_train.csv"
+GOLD_IN_XLSX = DATA / "gold_to_annotate_V5_final.xlsx"
+
+SILVER_OUT = DATA / "silver_train_clean_v1.csv"
+GOLD_OUT = DATA / "gold_labeled_300_clean_v1.csv"
+LOG_OUT = DATA / "cleaning_log_v1.json"
+
+# -------------------------
+# Regex loading
+# -------------------------
+def find_regex_file() -> Path:
+    # Try a few common locations
+    cands = [
+        ROOT / "regex_v1.txt",
+        ROOT / "spec" / "regex_v1.txt",
+        DATA / "regex_v1.txt",
+        ROOT / "scripts" / "regex_v1.txt",
+    ]
+    for p in cands:
+        if p.exists():
+            return p
+    raise FileNotFoundError(
+        "Cannot find regex_v1.txt. Put it in project root, spec/, data_new/, or scripts/."
+    )
+
+def load_patterns(regex_path: Path):
+    """
+    Expected format: one regex per line, # for comments.
+    We compile with IGNORECASE + MULTILINE.
+    """
+    patterns = []
+    raw_lines = regex_path.read_text(encoding="utf-8").splitlines()
+    for line in raw_lines:
+        s = line.strip()
+        if not s or s.startswith("#"):
+            continue
+        patterns.append(s)
+    compiled = [re.compile(p, flags=re.IGNORECASE | re.MULTILINE) for p in patterns]
+    return patterns, compiled
+
+# -------------------------
+# Placeholder policy
+# -------------------------
+# We only enforce AGE_GENDER placeholder reliably by using our own recognizer in addition to regex_v1
+P_AGE_GENDER = re.compile(
+    r"(\[\s*\d{1,3}\s*[FfMm]\s*\])|(\(\s*\d{1,3}\s*[FfMm]\s*\))|(\b\d{1,3}\s*[FfMm]\b)",
+    flags=re.IGNORECASE
+)
+
+def basic_normalize(text: str) -> str:
+    t = "" if text is None else str(text)
+    t = t.replace("\r\n", "\n")
+    t = re.sub(r"\n{3,}", "\n\n", t)
+    t = re.sub(r"[ \t]{2,}", " ", t)
+    return t.strip()
+
+def apply_cleaning(text: str, patterns, compiled):
+    """
+    Returns:
+      cleaned_text, hit_counts_per_pattern (list[int]), age_gender_hits (int)
+    """
+    t0 = basic_normalize(text)
+
+    # placeholder replacement (do this first so it doesn't get deleted by other patterns)
+    age_hits = 0
+    def _age_sub(m):
+        nonlocal age_hits
+        age_hits += 1
+        return " <AGE_GENDER> "
+    t = P_AGE_GENDER.sub(_age_sub, t0)
+
+    hits = []
+    for pat_str, rgx in zip(patterns, compiled):
+        # count matches BEFORE replacing
+        ms = list(rgx.finditer(t))
+        hits.append(len(ms))
+        if ms:
+            t = rgx.sub(" ", t)
+
+    t = re.sub(r"[ \t]{2,}", " ", t)
+    t = re.sub(r"\n{3,}", "\n\n", t)
+    t = t.strip()
+    return t, hits, age_hits
+
+# -------------------------
+# Main
+# -------------------------
+def main():
+    if not SILVER_IN.exists():
+        raise FileNotFoundError(f"Missing {SILVER_IN}")
+    if not GOLD_IN_XLSX.exists():
+        raise FileNotFoundError(f"Missing {GOLD_IN_XLSX}")
+
+    regex_file = find_regex_file()
+    patterns, compiled = load_patterns(regex_file)
+
+    silver = pd.read_csv(SILVER_IN, low_memory=False)
+    gold = pd.read_excel(GOLD_IN_XLSX)
+
+    if "text" not in silver.columns:
+        raise ValueError("silver_train.csv must contain a 'text' column")
+    if "text" not in gold.columns:
+        raise ValueError("gold file must contain a 'text' column")
+
+    # logs
+    pat_total_hits = [0] * len(patterns)
+    total_age_hits = 0
+
+    # clean silver
+    silver_text_before = silver["text"].astype(str)
+    silver_clean_text = []
+    silver_rows_changed = 0
+
+    for s in silver_text_before.tolist():
+        cleaned, hits, age_hits = apply_cleaning(s, patterns, compiled)
+        silver_clean_text.append(cleaned)
+        total_age_hits += age_hits
+        for i, h in enumerate(hits):
+            pat_total_hits[i] += h
+        if cleaned != basic_normalize(s):
+            silver_rows_changed += 1
+
+    silver_clean = silver.copy()
+    silver_clean["text_clean_v1"] = silver_clean_text
+    silver_clean.to_csv(SILVER_OUT, index=False, encoding="utf-8-sig")
+
+    # clean gold
+    gold_text_before = gold["text"].astype(str)
+    gold_clean_text = []
+    gold_rows_changed = 0
+
+    for s in gold_text_before.tolist():
+        cleaned, hits, age_hits = apply_cleaning(s, patterns, compiled)
+        gold_clean_text.append(cleaned)
+        total_age_hits += age_hits
+        for i, h in enumerate(hits):
+            pat_total_hits[i] += h
+        if cleaned != basic_normalize(s):
+            gold_rows_changed += 1
+
+    gold_clean = gold.copy()
+    gold_clean["text_clean_v1"] = gold_clean_text
+    gold_clean.to_csv(GOLD_OUT, index=False, encoding="utf-8-sig")
+
+    # build log
+    per_pattern = []
+    for p, n in zip(patterns, pat_total_hits):
+        per_pattern.append({"pattern": p, "hits": int(n)})
+
+    log = {
+        "timestamp": datetime.now().isoformat(timespec="seconds"),
+        "regex_file": str(regex_file.relative_to(ROOT)) if regex_file.is_relative_to(ROOT) else str(regex_file),
+        "n_patterns": len(patterns),
+        "placeholders": {
+            "AGE_GENDER": "<AGE_GENDER>",
+            "age_gender_hits_total": int(total_age_hits),
+            "age_gender_rule": "([25F] / (25F) / 25F-like signatures) -> <AGE_GENDER>"
+        },
+        "inputs": {
+            "silver_in": str(SILVER_IN.name),
+            "gold_in": str(Path(GOLD_IN_XLSX).name)
+        },
+        "outputs": {
+            "silver_out": str(SILVER_OUT.name),
+            "gold_out": str(GOLD_OUT.name)
+        },
+        "rows_changed": {
+            "silver_rows": int(len(silver)),
+            "silver_rows_changed": int(silver_rows_changed),
+            "gold_rows": int(len(gold)),
+            "gold_rows_changed": int(gold_rows_changed)
+        },
+        "pattern_hits_total": per_pattern
+    }
+
+    LOG_OUT.write_text(json.dumps(log, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    print("Wrote:", SILVER_OUT)
+    print("Wrote:", GOLD_OUT)
+    print("Wrote:", LOG_OUT)
+    print("Regex used:", regex_file)
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,118 @@
+{
+  "timestamp": "2026-02-05T17:06:12",
+  "regex_file": "spec\\regex_v1.txt",
+  "n_patterns": 23,
+  "placeholders": {
+    "AGE_GENDER": "<AGE_GENDER>",
+    "age_gender_hits_total": 931,
+    "age_gender_rule": "([25F] / (25F) / 25F-like signatures) -> <AGE_GENDER>"
+  },
+  "inputs": {
+    "silver_in": "silver_train.csv",
+    "gold_in": "gold_to_annotate_V5_final.xlsx"
+  },
+  "outputs": {
+    "silver_out": "silver_train_clean_v1.csv",
+    "gold_out": "gold_labeled_300_clean_v1.csv"
+  },
+  "rows_changed": {
+    "silver_rows": 1630,
+    "silver_rows_changed": 475,
+    "gold_rows": 300,
+    "gold_rows_changed": 150
+  },
+  "pattern_hits_total": [
+    {
+      "pattern": "\\bAITA\\b",
+      "hits": 139
+    },
+    {
+      "pattern": "\\bWIBTA\\b",
+      "hits": 15
+    },
+    {
+      "pattern": "\\bAITAH\\b",
+      "hits": 3
+    },
+    {
+      "pattern": "\\bAmItheAsshole\\b",
+      "hits": 0
+    },
+    {
+      "pattern": "(?i)\\bam\\s+i\\s+the\\s+asshole\\b",
+      "hits": 10
+    },
+    {
+      "pattern": "(?i)\\bwould\\s+i\\s+be\\s+the\\s+asshole\\b",
+      "hits": 1
+    },
+    {
+      "pattern": "\\bYTA\\b",
+      "hits": 1
+    },
+    {
+      "pattern": "\\bNTA\\b",
+      "hits": 1
+    },
+    {
+      "pattern": "\\bESH\\b",
+      "hits": 0
+    },
+    {
+      "pattern": "\\bNAH\\b",
+      "hits": 5
+    },
+    {
+      "pattern": "\\bINFO\\b",
+      "hits": 23
+    },
+    {
+      "pattern": "(?m)^\\s*TL;?DR[:\\-]?\\s*",
+      "hits": 158
+    },
+    {
+      "pattern": "(?m)^\\s*EDIT[:\\-]?\\s*",
+      "hits": 86
+    },
+    {
+      "pattern": "(?m)^\\s*UPDATE[:\\-]?\\s*",
+      "hits": 13
+    },
+    {
+      "pattern": "\\bthrowaway\\b",
+      "hits": 26
+    },
+    {
+      "pattern": "\\(\\s*\\d{1,2}\\s*[/\\-]\\s*[FfMm]\\s*\\)",
+      "hits": 8
+    },
+    {
+      "pattern": "\\(\\s*[FfMm]\\s*[/\\-]\\s*\\d{1,2}\\s*\\)",
+      "hits": 2
+    },
+    {
+      "pattern": "\\[\\s*\\d{1,2}\\s*[/\\-]\\s*[FfMm]\\s*\\]",
+      "hits": 0
+    },
+    {
+      "pattern": "\\[\\s*[FfMm]\\s*[/\\-]\\s*\\d{1,2}\\s*\\]",
+      "hits": 0
+    },
+    {
+      "pattern": "\\{\\s*\\d{1,2}\\s*[FfMm]\\s*\\}",
+      "hits": 0
+    },
+    {
+      "pattern": "\\{\\s*[FfMm]\\s*\\d{1,2}\\s*\\}",
+      "hits": 0
+    },
+    {
+      "pattern": "<\\s*\\d{1,2}\\s*[FfMm]\\s*>",
+      "hits": 0
+    },
+    {
+      "pattern": "<\\s*[FfMm]\\s*\\d{1,2}\\s*>",
+      "hits": 0
+    }
+  ]
+}

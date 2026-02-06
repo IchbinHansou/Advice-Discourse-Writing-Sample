@@ -1,0 +1,125 @@
+import pandas as pd
+from pathlib import Path
+from datetime import datetime
+import json
+
+HERE = Path(__file__).resolve().parent
+ROOT = HERE.parent
+DATA = ROOT / "data_new"
+
+SAFE_POOL = DATA / "dataset_raw_submissions_only_safe.csv"
+GOLD_XLSX = DATA / "gold_to_annotate_V5_final.xlsx"
+
+OUT_SILVER = DATA / "silver_train.csv"
+OUT_IDS    = DATA / "silver_ids.csv"
+OUT_LOG    = DATA / "sampling_log_silver.json"
+
+ADVICE_DOMAIN = "ra"
+STORY_DOMAIN  = "confession"
+EXCLUDE_DOMAINS = {"aita"}
+
+SEED = 1004
+MIN_TOKENS = 60
+TARGET_N_PER_CLASS = 900
+
+def token_len(s: str) -> int:
+    if s is None:
+        return 0
+    return len(str(s).split())
+
+def ensure_text(df: pd.DataFrame) -> pd.DataFrame:
+    if "text" in df.columns:
+        df["text"] = df["text"].astype(str)
+        return df
+
+    title = df["title"].astype(str) if "title" in df.columns else ""
+    body = None
+    for c in ["body", "selftext", "post", "content", "text_body"]:
+        if c in df.columns:
+            body = df[c].astype(str)
+            break
+    if body is None:
+        body = ""
+    df["text"] = title + "\n\n" + body
+    return df
+
+def main():
+    safe = pd.read_csv(str(SAFE_POOL), low_memory=False)
+    safe["doc_id"] = safe["doc_id"].astype(str)
+    safe["domain"] = safe["domain"].astype(str)
+    safe = ensure_text(safe)
+
+    gold = pd.read_excel(str(GOLD_XLSX), sheet_name=0)
+    gold["doc_id"] = gold["doc_id"].astype(str)
+    gold_ids = set(gold["doc_id"].tolist())
+
+    # filter: exclude aita
+    safe2 = safe[~safe["domain"].isin(EXCLUDE_DOMAINS)].copy()
+
+    # filter: exclude gold overlap
+    safe2 = safe2[~safe2["doc_id"].isin(gold_ids)].copy()
+
+    # filter: min length
+    safe2["tok"] = safe2["text"].map(token_len)
+    safe2 = safe2[safe2["tok"] >= MIN_TOKENS].copy()
+
+    advice_pool = safe2[safe2["domain"] == ADVICE_DOMAIN].copy()
+    story_pool  = safe2[safe2["domain"] == STORY_DOMAIN].copy()
+
+    if len(advice_pool) == 0 or len(story_pool) == 0:
+        raise RuntimeError(f"Empty pool after filters. ra={len(advice_pool)} confession={len(story_pool)}")
+
+    n = min(TARGET_N_PER_CLASS, len(advice_pool), len(story_pool))
+
+    advice_s = advice_pool.sample(n=n, random_state=SEED).copy()
+    story_s  = story_pool.sample(n=n, random_state=SEED + 1).copy()
+
+    # pseudo-silver labels
+    advice_s["silver_label"] = "ADVICE"
+    story_s["silver_label"]  = "STORY"
+
+    silver = pd.concat([advice_s, story_s], ignore_index=True).sample(frac=1.0, random_state=SEED + 2)
+
+    # checks
+    dup = int(silver["doc_id"].duplicated().sum())
+    overlap = len(set(silver["doc_id"]) & gold_ids)
+
+    # write outputs
+    silver.to_csv(str(OUT_SILVER), index=False, encoding="utf-8-sig")
+    silver[["doc_id","domain","silver_label"]].to_csv(str(OUT_IDS), index=False, encoding="utf-8-sig")
+
+    log = {
+        "timestamp": datetime.now().isoformat(timespec="seconds"),
+        "seed": SEED,
+        "min_tokens": MIN_TOKENS,
+        "exclude_domains": sorted(list(EXCLUDE_DOMAINS)),
+        "target_n_per_class": TARGET_N_PER_CLASS,
+        "actual_n_per_class": int(n),
+        "pool_sizes_after_filters": {
+            "ra": int(len(advice_pool)),
+            "confession": int(len(story_pool)),
+            "max_balanced_n_per_class": int(min(len(advice_pool), len(story_pool))),
+        },
+        "checks": {
+            "doc_id_duplicates": dup,
+            "gold_overlap": int(overlap),
+        },
+        "silver_counts": {
+            "total": int(len(silver)),
+            "by_label": silver["silver_label"].value_counts().to_dict(),
+            "by_domain": silver["domain"].value_counts().to_dict()
+        }
+    }
+    OUT_LOG.write_text(json.dumps(log, indent=2), encoding="utf-8")
+
+    print("Wrote:", OUT_SILVER)
+    print("Wrote:", OUT_IDS)
+    print("Wrote:", OUT_LOG)
+    print("actual n_per_class:", n)
+    print("checks: dup=", dup, "gold_overlap=", overlap)
+
+    if overlap != 0:
+        raise RuntimeError("Train/Test leakage: silver overlaps gold! Fix before running models.")
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,295 @@
+import json
+from datetime import datetime
+from pathlib import Path
+
+import pandas as pd
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import classification_report, f1_score, confusion_matrix
+
+# =========================
+# Paths / Config
+# =========================
+HERE = Path(__file__).resolve().parent
+ROOT = HERE.parent
+DATA = ROOT / "data_new"
+
+SILVER_RAW = DATA / "silver_train.csv"
+GOLD_RAW   = DATA / "gold_to_annotate_V5_final.xlsx"     # raw gold (xlsx)
+
+SILVER_CLN = DATA / "silver_train_clean_v1.csv"
+GOLD_CLN   = DATA / "gold_labeled_300_clean_v1.csv"      # cleaned gold (csv)
+
+OUT_JSON = DATA / "results_tfidf_dual.json"
+OUT_TXT  = DATA / "results_tfidf_dual.txt"
+
+ID_COL = "doc_id"
+TEXT_COL = "text"
+GOLD_LABEL_COL = "gold_label"
+SILVER_LABEL_COL = "silver_label"
+
+KEEP_LABELS_BINARY = ["ADVICE", "STORY"]   # if you later rename STORY -> DISCLOSURE, change here consistently.
+
+SEED = 1004
+
+TFIDF_PARAMS = dict(
+    lowercase=True,
+    stop_words="english",
+    ngram_range=(1, 3),   # <-- THIS is your real setting
+    min_df=3,
+    max_df=0.95,
+)
+
+LR_PARAMS = dict(
+    max_iter=2000,
+    random_state=SEED,
+)
+
+# =========================
+# Helpers
+# =========================
+def normalize_doc_id_series(s: pd.Series) -> pd.Series:
+    """
+    Normalize doc_id to stable strings.
+    Fix common Excel issue: numeric IDs become '123.0' after read.
+    """
+    s = s.astype(str).str.strip()
+    # If it looks like digits + ".0", drop the ".0"
+    s = s.str.replace(r"^(\d+)\.0$", r"\1", regex=True)
+    return s
+
+def require_cols(df: pd.DataFrame, cols: list[str], name: str) -> None:
+    missing = [c for c in cols if c not in df.columns]
+    if missing:
+        raise KeyError(
+            f"[{name}] Missing required columns: {missing}\n"
+            f"Available columns: {list(df.columns)}"
+        )
+
+def read_gold(path: Path, is_excel: bool) -> pd.DataFrame:
+    if is_excel:
+        df = pd.read_excel(path, sheet_name=0)
+    else:
+        df = pd.read_csv(path, low_memory=False)
+
+    require_cols(df, [ID_COL, TEXT_COL, GOLD_LABEL_COL], name=f"GOLD({path.name})")
+    df[ID_COL] = normalize_doc_id_series(df[ID_COL])
+    df[TEXT_COL] = df[TEXT_COL].astype(str)
+    df[GOLD_LABEL_COL] = df[GOLD_LABEL_COL].astype(str).str.upper().str.strip()
+    return df
+
+def read_silver(path: Path) -> pd.DataFrame:
+    df = pd.read_csv(path, low_memory=False)
+    require_cols(df, [ID_COL, TEXT_COL, SILVER_LABEL_COL, "domain"], name=f"SILVER({path.name})")
+    df[ID_COL] = normalize_doc_id_series(df[ID_COL])
+    df[TEXT_COL] = df[TEXT_COL].astype(str)
+    df[SILVER_LABEL_COL] = df[SILVER_LABEL_COL].astype(str).str.upper().str.strip()
+    df["domain"] = df["domain"].astype(str).str.lower().str.strip()
+    return df
+
+def subset_gold_binary(gold: pd.DataFrame) -> pd.DataFrame:
+    gold_bin = gold[gold[GOLD_LABEL_COL].isin(KEEP_LABELS_BINARY)].copy()
+    # stable order for reproducibility in comparisons
+    gold_bin = gold_bin.sort_values(ID_COL).reset_index(drop=True)
+    return gold_bin
+
+def compare_texts_by_id(
+    name: str,
+    df_a: pd.DataFrame,
+    df_b: pd.DataFrame,
+    label_col_a: str | None = None,
+    label_col_b: str | None = None,
+    max_examples: int = 6,
+) -> None:
+    """
+    Compare two datasets on shared doc_id, report:
+    - ID overlap
+    - identical-text ratio
+    - empty-text counts
+    - optional label agreement
+    - show a few concrete diffs
+    """
+    a_ids = set(df_a[ID_COL])
+    b_ids = set(df_b[ID_COL])
+    inter = sorted(list(a_ids & b_ids))
+    only_a = len(a_ids - b_ids)
+    only_b = len(b_ids - a_ids)
+
+    print(f"\n[DIFF] {name}")
+    print(f"  A n_ids={len(a_ids)} | B n_ids={len(b_ids)} | overlap={len(inter)} | only_A={only_a} | only_B={only_b}")
+
+    if len(inter) == 0:
+        print("  No overlapping doc_id. Cannot compare texts.")
+        return
+
+    a = df_a[[ID_COL, TEXT_COL] + ([label_col_a] if label_col_a else [])].copy()
+    b = df_b[[ID_COL, TEXT_COL] + ([label_col_b] if label_col_b else [])].copy()
+
+    merged = a.merge(b, on=ID_COL, how="inner", suffixes=("_A", "_B"))
+    merged["text_A"] = merged[f"{TEXT_COL}_A"].astype(str)
+    merged["text_B"] = merged[f"{TEXT_COL}_B"].astype(str)
+
+    merged["is_identical"] = merged["text_A"].values == merged["text_B"].values
+    ident_ratio = merged["is_identical"].mean()
+
+    empty_a = (merged["text_A"].str.strip() == "").sum()
+    empty_b = (merged["text_B"].str.strip() == "").sum()
+
+    print(f"  identical_text_ratio={ident_ratio:.4f}")
+    print(f"  empty_text: A={empty_a} | B={empty_b}")
+
+    if label_col_a and label_col_b:
+        merged["lab_A"] = merged[f"{label_col_a}_A"].astype(str)
+        merged["lab_B"] = merged[f"{label_col_b}_B"].astype(str)
+        agree = (merged["lab_A"] == merged["lab_B"]).mean()
+        print(f"  label_agreement_ratio={agree:.4f}")
+
+    # Show examples where texts differ
+    diffs = merged[~merged["is_identical"]].copy()
+    print(f"  n_text_diffs={len(diffs)}")
+    if len(diffs) > 0:
+        show = diffs.head(max_examples)
+        for i, row in show.iterrows():
+            doc_id = row[ID_COL]
+            a_snip = row["text_A"][:220].replace("\n", " ")
+            b_snip = row["text_B"][:220].replace("\n", " ")
+            print(f"    - doc_id={doc_id}")
+            print(f"      A: {a_snip}")
+            print(f"      B: {b_snip}")
+
+def run_one(
+    train: pd.DataFrame,
+    gold: pd.DataFrame,
+    tag: str,
+) -> dict:
+    X_train = train[TEXT_COL].astype(str)
+    y_train = train[SILVER_LABEL_COL].astype(str)
+
+    gold_bin = subset_gold_binary(gold)
+    X_test = gold_bin[TEXT_COL].astype(str)
+    y_test = gold_bin[GOLD_LABEL_COL].astype(str)
+
+    vec = TfidfVectorizer(**TFIDF_PARAMS)
+    Xtr = vec.fit_transform(X_train)
+    Xte = vec.transform(X_test)
+
+    clf = LogisticRegression(**LR_PARAMS)
+    clf.fit(Xtr, y_train)
+    pred = clf.predict(Xte)
+
+    macro = f1_score(y_test, pred, average="macro")
+    report = classification_report(y_test, pred, digits=4, labels=KEEP_LABELS_BINARY, zero_division=0)
+    cm = confusion_matrix(y_test, pred, labels=KEEP_LABELS_BINARY)
+
+    return {
+        "tag": tag,
+        "train_n": int(len(train)),
+        "test_n_binary": int(len(gold_bin)),
+        "macro_f1": float(macro),
+        "label_counts_test": gold_bin[GOLD_LABEL_COL].value_counts().to_dict(),
+        "confusion_matrix_labels": KEEP_LABELS_BINARY,
+        "confusion_matrix": cm.tolist(),
+        "report": report,
+    }
+
+def check_train_test_leakage(train: pd.DataFrame, gold: pd.DataFrame, name: str) -> None:
+    train_ids = set(train[ID_COL])
+    gold_ids = set(gold[ID_COL])
+    overlap = train_ids & gold_ids
+    print(f"\n[LEAKAGE] {name}: overlap_ids={len(overlap)}")
+    if len(overlap) > 0:
+        print("  Examples:", list(sorted(overlap))[:10])
+        raise RuntimeError(f"Train/Test leakage detected for {name}. Stop and fix before running models.")
+
+# =========================
+# Main
+# =========================
+def main():
+    DATA.mkdir(parents=True, exist_ok=True)
+
+    # Load datasets
+    silver_raw = read_silver(SILVER_RAW)
+    silver_cln = read_silver(SILVER_CLN)
+
+    gold_raw = read_gold(GOLD_RAW, is_excel=True)
+    gold_cln = read_gold(GOLD_CLN, is_excel=False)
+
+    # Basic leakage checks (by doc_id only)
+    check_train_test_leakage(silver_raw, gold_raw, "RAW(silver_raw vs gold_raw)")
+    check_train_test_leakage(silver_cln, gold_cln, "CLEANED(silver_cln vs gold_cln)")
+
+    # Compare ID sets across raw vs cleaned versions (should match if aligned)
+    compare_texts_by_id(
+        name="GOLD raw(xlsx) vs GOLD cleaned(csv) on BINARY subset",
+        df_a=subset_gold_binary(gold_raw),
+        df_b=subset_gold_binary(gold_cln),
+        label_col_a=GOLD_LABEL_COL,
+        label_col_b=GOLD_LABEL_COL,
+        max_examples=6,
+    )
+
+    # Optional: compare silver raw vs silver cleaned (should be same doc_ids if you cleaned aligned files)
+    compare_texts_by_id(
+        name="SILVER raw(csv) vs SILVER cleaned(csv) (doc_id alignment + text diff)",
+        df_a=silver_raw,
+        df_b=silver_cln,
+        label_col_a=SILVER_LABEL_COL,
+        label_col_b=SILVER_LABEL_COL,
+        max_examples=6,
+    )
+
+    # Run models
+    r_raw = run_one(silver_raw, gold_raw, "RAW")
+    r_cln = run_one(silver_cln, gold_cln, "CLEANED_v1")
+
+    # FIX: correct model string based on actual TFIDF_PARAMS
+    model_str = f"TFIDF(word {TFIDF_PARAMS['ngram_range'][0]}-{TFIDF_PARAMS['ngram_range'][1]})+LogReg"
+
+    out = {
+        "timestamp": datetime.now().isoformat(timespec="seconds"),
+        "model": model_str,
+        "tfidf_params": TFIDF_PARAMS,
+        "lr_params": LR_PARAMS,
+        "results": {
+            "RAW": {k: v for k, v in r_raw.items() if k != "report"},
+            "CLEANED_v1": {k: v for k, v in r_cln.items() if k != "report"},
+        },
+    }
+
+    OUT_JSON.write_text(json.dumps(out, indent=2), encoding="utf-8")
+
+    txt = []
+    txt.append("=== RAW ===\n" + r_raw["report"] + f"\nmacro_f1={r_raw['macro_f1']:.4f}\n"
+               + f"confusion_matrix({KEEP_LABELS_BINARY})={r_raw['confusion_matrix']}\n")
+    txt.append("\n=== CLEANED_v1 ===\n" + r_cln["report"] + f"\nmacro_f1={r_cln['macro_f1']:.4f}\n"
+               + f"confusion_matrix({KEEP_LABELS_BINARY})={r_cln['confusion_matrix']}\n")
+    OUT_TXT.write_text("\n".join(txt), encoding="utf-8")
+
+    print("\n".join(txt))
+    print("Wrote:", OUT_JSON)
+    print("Wrote:", OUT_TXT)
+    print("Model:", model_str)
+
+if __name__ == "__main__":
+    main()
+
+import re
+
+PATS = {
+    "AITA_acronym": re.compile(r"\bAITA\b", re.I),
+    "verdicts": re.compile(r"\b(YTA|NTA|ESH|NAH)\b", re.I),
+    "tldr_edit": re.compile(r"\b(TL;?DR|EDIT|UPDATE)\b", re.I),
+    "age_gender": re.compile(r"\[\s*\d{1,2}\s*[MF]\s*\]", re.I),
+}
+
+def marker_rate(df, name):
+    txt = df["text"].astype(str)
+    print(f"\n[MARKERS] {name} n={len(df)}")
+    for k, pat in PATS.items():
+        rate = txt.str.contains(pat).mean()
+        print(f"  {k}: {rate:.4f}")
+
+marker_rate(subset_gold_binary(gold_raw), "gold_raw_binary")
+marker_rate(subset_gold_binary(gold_cln), "gold_clean_binary")
+marker_rate(silver_raw, "silver_raw")
+marker_rate(silver_cln, "silver_clean")

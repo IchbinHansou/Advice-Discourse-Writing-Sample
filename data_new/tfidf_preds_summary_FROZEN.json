@@ -1,0 +1,79 @@
+{
+  "timestamp": "2026-02-05T23:58:01",
+  "model": "TFIDF(word 1-3)+LogReg",
+  "raw_norm_frozen": {
+    "pred_file": "C:\\Users\\PC\\OneDrive\\\u684c\u9762\\Saarland Writing Sample\\data_new\\preds_tfidf_raw_norm_FROZEN_gold.csv",
+    "macro_f1": 0.6139840901127707,
+    "by_domain": {
+      "aita": {
+        "n": 92,
+        "macro_f1": 0.36351498968321394,
+        "counts": {
+          "STORY": 64,
+          "ADVICE": 28
+        }
+      },
+      "confession": {
+        "n": 88,
+        "macro_f1": 0.5071364046973803,
+        "counts": {
+          "STORY": 58,
+          "ADVICE": 30
+        }
+      },
+      "ra": {
+        "n": 98,
+        "macro_f1": 0.49333333333333335,
+        "counts": {
+          "ADVICE": 89,
+          "STORY": 9
+        }
+      }
+    },
+    "n": 278,
+    "label_counts_test": {
+      "ADVICE": 147,
+      "STORY": 131
+    }
+  },
+  "clean_v1_frozen": {
+    "pred_file": "C:\\Users\\PC\\OneDrive\\\u684c\u9762\\Saarland Writing Sample\\data_new\\preds_tfidf_clean_v1_FROZEN_gold.csv",
+    "macro_f1": 0.627370092266049,
+    "by_domain": {
+      "aita": {
+        "n": 92,
+        "macro_f1": 0.3935035358983579,
+        "counts": {
+          "STORY": 64,
+          "ADVICE": 28
+        }
+      },
+      "confession": {
+        "n": 88,
+        "macro_f1": 0.5309168443496801,
+        "counts": {
+          "STORY": 58,
+          "ADVICE": 30
+        }
+      },
+      "ra": {
+        "n": 98,
+        "macro_f1": 0.49886363636363634,
+        "counts": {
+          "ADVICE": 89,
+          "STORY": 9
+        }
+      }
+    },
+    "n": 278,
+    "label_counts_test": {
+      "ADVICE": 147,
+      "STORY": 131
+    }
+  },
+  "alignment_check": {
+    "binary_n": 278,
+    "same_doc_id_order": true,
+    "same_gold_labels": true
+  }
+}

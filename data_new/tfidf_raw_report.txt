@@ -1,0 +1,18 @@
+=== RAW ===
+Config: {"model": "TFIDF+LogReg", "ngram_range": [1, 3], "min_df": 3, "max_features": 200000, "C": 1.0, "seed": 1004}
+Overall: n=278 macro_f1=0.6291
+
+              precision    recall  f1-score   support
+
+      ADVICE     0.6571    0.6259    0.6411       147
+       STORY     0.6014    0.6336    0.6171       131
+
+    accuracy                         0.6295       278
+   macro avg     0.6293    0.6297    0.6291       278
+weighted avg     0.6309    0.6295    0.6298       278
+
+
+By domain (gold, binary only; MIXED excluded):
+- aita: n=92 macro_f1=0.4437 counts={'STORY': 64, 'ADVICE': 28}
+- confession: n=88 macro_f1=0.4753 counts={'STORY': 58, 'ADVICE': 30}
+- ra: n=98 macro_f1=0.4828 counts={'ADVICE': 89, 'STORY': 9}

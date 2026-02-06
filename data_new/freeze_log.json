@@ -1,0 +1,57 @@
+{
+  "timestamp": "2026-02-05T19:23:53",
+  "inputs": {
+    "gold_labeled_in": "C:\\Users\\PC\\OneDrive\\\u684c\u9762\\Saarland Writing Sample\\data_new\\gold_to_annotate_V5_final.xlsx",
+    "silver_train_in": "C:\\Users\\PC\\OneDrive\\\u684c\u9762\\Saarland Writing Sample\\data_new\\silver_train.csv"
+  },
+  "outputs": {
+    "gold_ids": "C:\\Users\\PC\\OneDrive\\\u684c\u9762\\Saarland Writing Sample\\data_new\\gold_ids_FROZEN.csv",
+    "silver_ids": "C:\\Users\\PC\\OneDrive\\\u684c\u9762\\Saarland Writing Sample\\data_new\\silver_ids_FROZEN.csv",
+    "gold_raw_norm": "C:\\Users\\PC\\OneDrive\\\u684c\u9762\\Saarland Writing Sample\\data_new\\gold_raw_norm_FROZEN.csv",
+    "gold_clean_v1": "C:\\Users\\PC\\OneDrive\\\u684c\u9762\\Saarland Writing Sample\\data_new\\gold_clean_v1_FROZEN.csv",
+    "silver_raw_norm": "C:\\Users\\PC\\OneDrive\\\u684c\u9762\\Saarland Writing Sample\\data_new\\silver_train_raw_norm_FROZEN.csv",
+    "silver_clean_v1": "C:\\Users\\PC\\OneDrive\\\u684c\u9762\\Saarland Writing Sample\\data_new\\silver_train_clean_v1_FROZEN.csv"
+  },
+  "counts": {
+    "gold_n_total": 300,
+    "gold_label_counts": {
+      "ADVICE": 147,
+      "STORY": 131,
+      "MIXED": 22
+    },
+    "silver_n_total": 1630,
+    "silver_label_counts": {
+      "ADVICE": 815,
+      "STORY": 815
+    }
+  },
+  "leakage": {
+    "overlap_n": 0
+  },
+  "marker_rates_gold_raw_norm": {
+    "aita_acronym": 0.3333333333333333,
+    "verdicts": 0.0033333333333333335,
+    "tldr_edit_update": 0.18333333333333332,
+    "age_gender_any": 0.37
+  },
+  "marker_rates_gold_clean_v1": {
+    "aita_acronym": 0.0,
+    "verdicts": 0.0,
+    "tldr_edit_update": 0.0,
+    "age_gender_any": 0.0
+  },
+  "marker_rates_silver_raw_norm": {
+    "aita_acronym": 0.0006134969325153375,
+    "verdicts": 0.003067484662576687,
+    "tldr_edit_update": 0.11349693251533742,
+    "age_gender_any": 0.3128834355828221
+  },
+  "marker_rates_silver_clean_v1": {
+    "aita_acronym": 0.0,
+    "verdicts": 0.0,
+    "tldr_edit_update": 0.0,
+    "age_gender_any": 0.0
+  },
+  "changed_ratio_rawnorm_to_clean_gold": 0.53,
+  "changed_ratio_rawnorm_to_clean_silver": 0.35828220858895704
+}

@@ -1,0 +1,62 @@
+{
+  "timestamp": "2026-02-05T19:54:37",
+  "model": "TFIDF(word 1-3) + LogisticRegression",
+  "results": {
+    "RAW_NORM_FROZEN": {
+      "tag": "RAW_NORM_FROZEN",
+      "train_path": "C:\\Users\\PC\\OneDrive\\\u684c\u9762\\Saarland Writing Sample\\data_new\\silver_train_raw_norm_FROZEN.csv",
+      "gold_path": "C:\\Users\\PC\\OneDrive\\\u684c\u9762\\Saarland Writing Sample\\data_new\\gold_raw_norm_FROZEN.csv",
+      "train_n": 1630,
+      "test_n_binary": 278,
+      "label_counts_test": {
+        "ADVICE": 147,
+        "STORY": 131
+      },
+      "macro_f1": 0.6139840901127707,
+      "confusion_matrix(labels=['ADVICE','STORY'])": [
+        [
+          93,
+          54
+        ],
+        [
+          53,
+          78
+        ]
+      ],
+      "marker_rates_test_text": {
+        "aita_acronym": 0.33093525179856115,
+        "verdicts": 0.0035971223021582736,
+        "tldr_edit_update": 0.18705035971223022,
+        "age_gender_any": 0.2805755395683453
+      }
+    },
+    "CLEAN_V1_FROZEN": {
+      "tag": "CLEAN_V1_FROZEN",
+      "train_path": "C:\\Users\\PC\\OneDrive\\\u684c\u9762\\Saarland Writing Sample\\data_new\\silver_train_clean_v1_FROZEN.csv",
+      "gold_path": "C:\\Users\\PC\\OneDrive\\\u684c\u9762\\Saarland Writing Sample\\data_new\\gold_clean_v1_FROZEN.csv",
+      "train_n": 1630,
+      "test_n_binary": 278,
+      "label_counts_test": {
+        "ADVICE": 147,
+        "STORY": 131
+      },
+      "macro_f1": 0.627370092266049,
+      "confusion_matrix(labels=['ADVICE','STORY'])": [
+        [
+          98,
+          49
+        ],
+        [
+          54,
+          77
+        ]
+      ],
+      "marker_rates_test_text": {
+        "aita_acronym": 0.0,
+        "verdicts": 0.0,
+        "tldr_edit_update": 0.0,
+        "age_gender_any": 0.0035971223021582736
+      }
+    }
+  }
+}

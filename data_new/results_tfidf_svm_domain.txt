@@ -1,0 +1,28 @@
+=== RAW (SVM) ===
+              precision    recall  f1-score   support
+
+      ADVICE     0.6443    0.6531    0.6486       147
+       STORY     0.6047    0.5954    0.6000       131
+
+    accuracy                         0.6259       278
+   macro avg     0.6245    0.6242    0.6243       278
+weighted avg     0.6256    0.6259    0.6257       278
+
+macro_f1=0.6243
+Domain macro-F1: {'aita': {'n': 92, 'macro_f1': 0.3858477970627503}, 'confession': {'n': 88, 'macro_f1': 0.4996446339729922}, 'ra': {'n': 98, 'macro_f1': 0.5046089800773119}}
+Sanity: {'train_text_col': 'text', 'gold_text_col': 'text', 'artifact_doc_rate_gold': {'aita': 0.2949640287769784, 'wibta': 0.03237410071942446, 'yta': 0.0035971223021582736, 'nta': 0.0035971223021582736, 'esh': 0.0, 'nah': 0.0, 'edit': 0.1079136690647482, 'update': 0.03237410071942446, 'tldr': 0.039568345323741004, 'throwaway': 0.007194244604316547}, 'vocab_size': 13113}
+
+
+=== CLEANED (SVM) ===
+              precision    recall  f1-score   support
+
+      ADVICE     0.6340    0.6599    0.6467       147
+       STORY     0.6000    0.5725    0.5859       131
+
+    accuracy                         0.6187       278
+   macro avg     0.6170    0.6162    0.6163       278
+weighted avg     0.6180    0.6187    0.6180       278
+
+macro_f1=0.6163
+Domain macro-F1: {'aita': {'n': 92, 'macro_f1': 0.3963974710724084}, 'confession': {'n': 88, 'macro_f1': 0.5071364046973803}, 'ra': {'n': 98, 'macro_f1': 0.4431818181818182}}
+Sanity: {'train_text_col': 'text', 'gold_text_col': 'text', 'artifact_doc_rate_gold': {'aita': 0.0, 'wibta': 0.0, 'yta': 0.0, 'nta': 0.0, 'esh': 0.0, 'nah': 0.0, 'edit': 0.0, 'update': 0.0, 'tldr': 0.0, 'throwaway': 0.007194244604316547}, 'vocab_size': 13159}

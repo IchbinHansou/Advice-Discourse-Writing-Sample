@@ -1,0 +1,16 @@
+rows: 300
+unique doc_id: 300
+
+Label counts:
+gold_label
+ADVICE    147
+STORY     131
+MIXED      22
+Name: count, dtype: int64
+
+Domain counts:
+domain
+ra            100
+confession    100
+aita          100
+Name: count, dtype: int64

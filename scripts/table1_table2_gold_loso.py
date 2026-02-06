@@ -1,0 +1,458 @@
+from __future__ import annotations
+
+import json
+import re
+from pathlib import Path
+from typing import Dict, List
+
+import numpy as np
+import pandas as pd
+
+from sklearn.base import clone
+from sklearn.compose import ColumnTransformer
+from sklearn.feature_extraction.text import TfidfVectorizer, HashingVectorizer
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import f1_score
+from sklearn.model_selection import StratifiedKFold
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
+import sys
+import sklearn
+
+LABELS = ["ADVICE", "STORY"]
+DOMAINS = ["aita", "confession", "ra"]
+SEED = 1004
+
+
+# ---- shared config ----
+NGRAM_RANGE = (1, 3)
+MIN_DF = 3
+MAX_FEATURES = 200_000
+
+# 建议：先关掉 stop_words；如果你要复现旧结果就改成 "english"
+STOP_WORDS = "english"  # or "None"
+
+HASH_N_FEATURES = 2**20
+HASH_ALTERNATE_SIGN = False
+HASH_NORM = "l2"
+
+LOGREG_C = 1.0
+LOGREG_MAX_ITER = 4000
+LOGREG_SOLVER = "lbfgs"  # sklearn 默认就是这个
+
+
+def repo_root() -> Path:
+    return Path(__file__).resolve().parents[1]
+
+
+def normalize_label(x) -> str | None:
+    if x is None or (isinstance(x, float) and np.isnan(x)):
+        return None
+    s = str(x).strip().upper()
+    return s if s in LABELS else None
+
+
+def safe_text(x) -> str:
+    if x is None or (isinstance(x, float) and np.isnan(x)):
+        return ""
+    return str(x)
+
+
+# ---------------- Discourse features ----------------
+REQ_PATTERNS = [
+    r"\bwhat\s+should\s+i\b",
+    r"\bwhat\s+do\s+i\s+do\b",
+    r"\bany\s+advice\b",
+    r"\bany\s+suggestions\b",
+    r"\bshould\s+i\b",
+    r"\bcould\s+you\b",
+    r"\bcan\s+you\b",
+    r"\blooking\s+for\s+advice\b",
+    r"\blooking\s+for\s+help\b",
+]
+REQ_PATS = [re.compile(p, re.I) for p in REQ_PATTERNS]
+MODALS = {"should", "could", "would", "might", "may", "can", "must", "need", "needs", "have", "has", "had"}
+HEDGES = {"maybe", "perhaps", "probably", "possibly", "kinda", "sorta", "somewhat", "guess"}
+
+
+def discourse_feats(text: str) -> Dict[str, float]:
+    t = safe_text(text)
+    toks = re.findall(r"[A-Za-z']+", t.lower())
+    n_tok = max(1, len(toks))
+
+    q_marks = t.count("?")
+    req_count = sum(len(p.findall(t)) for p in REQ_PATS)
+
+    modal_count = sum(1 for w in toks if w in MODALS)
+    hedge_count = sum(1 for w in toks if w in HEDGES)
+
+    tail = t[-400:]
+    end_has_q = 1.0 if "?" in tail else 0.0
+    end_req = sum(len(p.findall(tail)) for p in REQ_PATS)
+    end_modal = sum(1 for w in re.findall(r"[A-Za-z']+", tail.lower()) if w in MODALS)
+
+    n_par = max(1, t.count("\n\n") + 1)
+
+    return {
+        "q_qmarks": float(q_marks),
+        "req_count": float(req_count),
+        "mod_modal_ratio": float(modal_count / n_tok),
+        "mod_hedge_ratio": float(hedge_count / n_tok),
+        "end_has_qmark": float(end_has_q),
+        "end_req_count": float(end_req),
+        "end_modal_count": float(end_modal),
+        "len_tok": float(n_tok),
+        "len_char": float(len(t)),
+        "len_paragraphs": float(n_par),
+    }
+
+
+def build_discourse_df(df: pd.DataFrame, text_col: str) -> pd.DataFrame:
+    feats = [discourse_feats(t) for t in df[text_col].astype(str).tolist()]
+    return pd.DataFrame(feats)
+
+
+# ---------------- Load gold (RAW / CLEAN) ----------------
+def load_gold(data_dir: Path, text_col: str) -> pd.DataFrame:
+    """
+    RAW:  data_new/gold_raw_norm_FROZEN.csv expects: domain, text, gold_label
+    CLEAN:data_new/gold_clean_v1_FROZEN.csv expects: domain, text_clean_v1, gold_label
+    """
+    if text_col == "text":
+        path = data_dir / "gold_raw_norm_FROZEN.csv"
+        if not path.exists():
+            raise FileNotFoundError(f"Missing {path}. Expect gold_raw_norm_FROZEN.csv (n≈267).")
+        df = pd.read_csv(path, low_memory=False)
+    else:
+        path = data_dir / "gold_clean_v1_FROZEN.csv"
+        if not path.exists():
+            raise FileNotFoundError(f"Missing {path}. Expect gold_clean_v1_FROZEN.csv (n≈300).")
+        df = pd.read_csv(path, low_memory=False)
+
+    df["gold_label"] = df["gold_label"].map(normalize_label)
+    df = df[df["gold_label"].isin(LABELS)].copy()
+    df["domain"] = df["domain"].astype(str).str.lower()
+
+    if text_col not in df.columns:
+        raise KeyError(f"Column '{text_col}' not found in {path}. Got columns: {list(df.columns)[:30]} ...")
+
+    return df
+
+
+def macro_f1(y_true: List[str], y_pred: List[str]) -> float:
+    return float(f1_score(y_true, y_pred, average="macro", labels=LABELS))
+
+
+# ---------------- Models ----------------
+def run_hash_probe(train: pd.DataFrame, test: pd.DataFrame, text_col: str) -> float:
+    """
+    Offline fixed-embedding probe:
+      Encoder: HashingVectorizer (no vocabulary fit)
+      Head:    Logistic Regression
+    """
+
+    vec = HashingVectorizer(
+        lowercase=True,
+        stop_words=STOP_WORDS,
+        ngram_range=NGRAM_RANGE,
+        n_features=HASH_N_FEATURES,
+        alternate_sign=HASH_ALTERNATE_SIGN,
+        norm=HASH_NORM,
+    )
+    clf = LogisticRegression(
+        max_iter=LOGREG_MAX_ITER,
+        C=LOGREG_C,
+        solver=LOGREG_SOLVER,
+        random_state=SEED,
+    )
+
+
+    pipe = Pipeline([("vec", vec), ("clf", clf)])
+    pipe.fit(train[text_col].astype(str), train["gold_label"].astype(str))
+    pred = pipe.predict(test[text_col].astype(str))
+    return macro_f1(test["gold_label"].tolist(), pred.tolist())
+
+
+def model_tfidf_logreg(text_col: str):
+    vec = TfidfVectorizer(
+        lowercase=True,
+        stop_words=STOP_WORDS,
+        ngram_range=NGRAM_RANGE,
+        min_df=MIN_DF,
+        max_features=MAX_FEATURES,
+    )
+    clf = LogisticRegression(
+        max_iter=LOGREG_MAX_ITER,
+        C=LOGREG_C,
+        solver=LOGREG_SOLVER,
+        random_state=SEED,
+    )
+    return Pipeline([("vec", vec), ("clf", clf)]), "tfidf_logreg"
+
+
+def model_discourse_only(text_col: str):
+    clf = Pipeline([
+        ("scaler", StandardScaler(with_mean=True, with_std=True)),
+        ("clf", LogisticRegression(max_iter=4000, C=1.0, random_state=SEED)),
+    ])
+    return clf, "discourse_only"
+
+
+def model_tfidf_plus_discourse(text_col: str):
+    def add_disc(df: pd.DataFrame) -> pd.DataFrame:
+        out = df.copy()
+        disc = build_discourse_df(out, text_col)
+        for c in disc.columns:
+            out[f"disc__{c}"] = disc[c].values
+        return out
+
+    disc_cols = [f"disc__{k}" for k in discourse_feats("").keys()]
+    pre = ColumnTransformer(
+        transformers=[
+                ("tfidf", TfidfVectorizer(
+        lowercase=True,
+        stop_words=STOP_WORDS,
+        ngram_range=NGRAM_RANGE,
+        min_df=MIN_DF,
+        max_features=MAX_FEATURES,
+    ), text_col),
+
+            ("disc", Pipeline([("scaler", StandardScaler(with_mean=True, with_std=True))]), disc_cols),
+        ],
+        remainder="drop",
+        sparse_threshold=0.3,
+    )
+    clf = LogisticRegression(max_iter=4000, C=1.0, random_state=SEED)
+    pipe = Pipeline([("pre", pre), ("clf", clf)])
+    return pipe, add_disc, "tfidf_plus_discourse"
+
+
+# Optional neural probe (kept for completeness; leave OFF by default because your network is flaky)
+def eval_neural_probe(train_df: pd.DataFrame, test_df: pd.DataFrame, text_col: str) -> float:
+    from sentence_transformers import SentenceTransformer
+    model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+    Xtr = model.encode(train_df[text_col].astype(str).tolist(), show_progress_bar=False, normalize_embeddings=True)
+    Xte = model.encode(test_df[text_col].astype(str).tolist(), show_progress_bar=False, normalize_embeddings=True)
+    clf = LogisticRegression(max_iter=4000, C=1.0, random_state=SEED)
+    clf.fit(Xtr, train_df["gold_label"].astype(str))
+    pred = clf.predict(Xte)
+    return macro_f1(test_df["gold_label"].tolist(), pred.tolist())
+
+
+# ---------------- Table 1: 5-fold CV on gold ----------------
+def gold_cv(df: pd.DataFrame, text_col: str, with_neural: bool = False) -> Dict[str, float]:
+    y = df["gold_label"].astype(str).tolist()
+    skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=SEED)
+
+    tfidf_pipe, k1 = model_tfidf_logreg(text_col)
+    disc_pipe, k2 = model_discourse_only(text_col)
+    union_pipe, add_disc, k3 = model_tfidf_plus_discourse(text_col)
+
+    scores: Dict[str, List[float]] = {
+        k1: [],
+        k2: [],
+        k3: [],
+        "hash_probe": [],
+    }
+    if with_neural:
+        scores["neural_minilm"] = []
+
+    for tr_idx, te_idx in skf.split(df, y):
+        tr = df.iloc[tr_idx].copy()
+        te = df.iloc[te_idx].copy()
+
+        # TFIDF
+        m = clone(tfidf_pipe)
+        m.fit(tr[text_col].astype(str), tr["gold_label"].astype(str))
+        pred = m.predict(te[text_col].astype(str))
+        scores[k1].append(macro_f1(te["gold_label"].tolist(), pred.tolist()))
+
+        # discourse-only
+        Xtr = build_discourse_df(tr, text_col).values
+        Xte = build_discourse_df(te, text_col).values
+        m = clone(disc_pipe)
+        m.fit(Xtr, tr["gold_label"].astype(str))
+        pred = m.predict(Xte)
+        scores[k2].append(macro_f1(te["gold_label"].tolist(), pred.tolist()))
+
+        # union
+        tr2 = add_disc(tr)
+        te2 = add_disc(te)
+        m = clone(union_pipe)
+        m.fit(tr2, tr2["gold_label"].astype(str))
+        pred = m.predict(te2)
+        scores[k3].append(macro_f1(te["gold_label"].tolist(), pred.tolist()))
+
+        # hash probe
+        scores["hash_probe"].append(run_hash_probe(tr, te, text_col))
+
+        if with_neural:
+            scores["neural_minilm"].append(eval_neural_probe(tr, te, text_col))
+
+    return {k: float(np.mean(v)) for k, v in scores.items()}
+
+
+# ---------------- Table 2: LOSO on gold ----------------
+def gold_loso(df: pd.DataFrame, text_col: str, with_neural: bool = False) -> Dict[str, Dict[str, float]]:
+    out: Dict[str, Dict[str, float]] = {}
+
+    tfidf_pipe, k1 = model_tfidf_logreg(text_col)
+    disc_pipe, k2 = model_discourse_only(text_col)
+    union_pipe, add_disc, k3 = model_tfidf_plus_discourse(text_col)
+
+    for held in DOMAINS:
+        train = df[df["domain"] != held].copy()
+        test = df[df["domain"] == held].copy()
+        if len(test) == 0:
+            continue
+
+        r: Dict[str, float] = {}
+
+        # TFIDF
+        m = clone(tfidf_pipe)
+        m.fit(train[text_col].astype(str), train["gold_label"].astype(str))
+        pred = m.predict(test[text_col].astype(str))
+        r[k1] = macro_f1(test["gold_label"].tolist(), pred.tolist())
+
+        # discourse-only
+        Xtr = build_discourse_df(train, text_col).values
+        Xte = build_discourse_df(test, text_col).values
+        m = clone(disc_pipe)
+        m.fit(Xtr, train["gold_label"].astype(str))
+        pred = m.predict(Xte)
+        r[k2] = macro_f1(test["gold_label"].tolist(), pred.tolist())
+
+        # union
+        tr2 = add_disc(train)
+        te2 = add_disc(test)
+        m = clone(union_pipe)
+        m.fit(tr2, tr2["gold_label"].astype(str))
+        pred = m.predict(te2)
+        r[k3] = macro_f1(test["gold_label"].tolist(), pred.tolist())
+
+        # hash probe
+        r["hash_probe"] = run_hash_probe(train, test, text_col)
+
+        if with_neural:
+            r["neural_minilm"] = eval_neural_probe(train, test, text_col)
+
+        out[held] = r
+
+    return out
+
+
+def rel_drop(in_f1: float, loso_f1: float) -> float:
+    if in_f1 <= 1e-9 or np.isnan(in_f1) or np.isnan(loso_f1):
+        return float("nan")
+    return float((in_f1 - loso_f1) / in_f1)
+
+
+def main():
+    root = repo_root()
+    data = root / "data_new"
+    out_json = data / "results_table1_table2_gold.json"
+    out_md = data / "table1_table2_gold.md"
+
+    # 网络问题，关掉 neural
+    with_neural = False
+
+    gold_raw = load_gold(data, "text")
+    gold_cln = load_gold(data, "text_clean_v1")
+
+    in_raw = gold_cv(gold_raw, "text", with_neural=with_neural)
+    in_cln = gold_cv(gold_cln, "text_clean_v1", with_neural=with_neural)
+
+    loso_raw = gold_loso(gold_raw, "text", with_neural=with_neural)
+    loso_cln = gold_loso(gold_cln, "text_clean_v1", with_neural=with_neural)
+
+    out = {
+    "table1_cv_in_domain": {"raw": in_raw, "clean": in_cln},
+    "table2_loso_cross_domain": {"raw": loso_raw, "clean": loso_cln},
+    }   
+
+    n1, n2 = NGRAM_RANGE
+    
+    out["config"] = {
+        "script": Path(__file__).name,
+        "seed": SEED,
+        "with_neural": with_neural,
+        "labels": LABELS,
+        "domains": DOMAINS,
+        "gold_rows_raw": int(len(gold_raw)),
+        "gold_rows_clean": int(len(gold_cln)),
+        "input_files": {
+            "gold_raw": "gold_raw_norm_FROZEN.csv",
+            "gold_clean": "gold_clean_v1_FROZEN.csv",
+        },
+        "tfidf": {
+            "analyzer": "word",
+            "lowercase": True,
+            "stop_words": STOP_WORDS if STOP_WORDS is not None else "none",
+            "ngram_range": [n1, n2],
+            "min_df": MIN_DF,
+            "max_features": MAX_FEATURES,
+        },
+        "hashing": {
+            "analyzer": "word",
+            "lowercase": True,
+            "stop_words": STOP_WORDS if STOP_WORDS is not None else "none",
+            "ngram_range": [n1, n2],
+            "n_features": HASH_N_FEATURES,
+            "alternate_sign": HASH_ALTERNATE_SIGN,
+            "norm": HASH_NORM,
+        },
+        "logreg": {
+            "C": LOGREG_C,
+            "max_iter": LOGREG_MAX_ITER,
+            "solver": LOGREG_SOLVER,
+        },
+        "cv": {"n_splits": 5, "shuffle": True},
+        "versions": {
+            "python": sys.version.split()[0],
+            "numpy": np.__version__,
+            "pandas": pd.__version__,
+            "sklearn": sklearn.__version__,
+        },
+    }
+
+    out_json.write_text(json.dumps(out, indent=2), encoding="utf-8")
+
+    n1, n2 = NGRAM_RANGE
+    pretty = {
+        "tfidf_logreg": f"TF–IDF (word {n1}–{n2}) + LogReg",
+        "hash_probe": f"Hash probe (HashingVectorizer {n1}–{n2} + LogReg)",
+        "discourse_only": "Discourse-only (hand features) + LogReg",
+        "tfidf_plus_discourse": f"TF–IDF + discourse (feature union) + LogReg",
+        "neural_minilm": "MiniLM sentence embeddings + linear probe",
+    }
+
+    model_order = ["tfidf_logreg", "hash_probe", "discourse_only", "tfidf_plus_discourse"]
+    if with_neural:
+        model_order.append("neural_minilm")
+
+    md = []
+    md.append("# Table 1 — In-domain on gold (5-fold CV), RAW vs CLEAN\n\n")
+    md.append("| Model | RAW macro-F1 | CLEAN macro-F1 | Δ (CLEAN−RAW) |\n")
+    md.append("|---|---:|---:|---:|\n")
+    for k in model_order:
+        r = in_raw.get(k, float("nan"))
+        c = in_cln.get(k, float("nan"))
+        md.append(f"| {pretty[k]} | {r:.4f} | {c:.4f} | {(c - r):+.4f} |\n")
+
+    md.append("\n# Table 2 — Cross-domain LOSO on gold (train on 2 subreddits; test on held-out)\n\n")
+    md.append("| Held-out domain | Model | RAW macro-F1 | CLEAN macro-F1 | Δ | Rel. drop vs Table1 (RAW) |\n")
+    md.append("|---|---|---:|---:|---:|---:|\n")
+    for dom in DOMAINS:
+        for k in model_order:
+            r = loso_raw.get(dom, {}).get(k, float("nan"))
+            c = loso_cln.get(dom, {}).get(k, float("nan"))
+            drop = rel_drop(in_raw.get(k, float("nan")), r)
+            md.append(f"| {dom} | {pretty[k]} | {r:.4f} | {c:.4f} | {(c - r):+.4f} | {drop:.3f} |\n")
+
+    out_md.write_text("".join(md), encoding="utf-8")
+    print("Wrote:", out_json)
+    print("Wrote:", out_md)
+
+
+if __name__ == "__main__":
+    main()

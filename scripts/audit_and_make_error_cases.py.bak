@@ -1,0 +1,217 @@
+from __future__ import annotations
+from pathlib import Path
+import json
+import random
+import pandas as pd
+from sklearn.metrics import f1_score, accuracy_score, classification_report
+
+
+def pick_existing(paths: list[Path]) -> Path | None:
+    for p in paths:
+        if p.exists():
+            return p
+    return None
+
+
+def find_by_name(root: Path, name: str) -> Path | None:
+    # exact match first
+    direct = root / name
+    if direct.exists():
+        return direct
+    # fallback: recursive
+    hits = list(root.rglob(name))
+    return hits[0] if hits else None
+
+
+def detect_pred_col(df: pd.DataFrame) -> str | None:
+    for c in ["pred_label", "pred", "prediction", "y_pred"]:
+        if c in df.columns:
+            return c
+    return None
+
+
+def ensure_cols(df: pd.DataFrame, required: list[str], where: str):
+    missing = [c for c in required if c not in df.columns]
+    if missing:
+        raise KeyError(f"[{where}] Missing columns: {missing}. Available: {list(df.columns)}")
+
+
+def eval_binary(df: pd.DataFrame, gold_col: str, pred_col: str) -> dict:
+    y = df[gold_col].astype(str)
+    yhat = df[pred_col].astype(str)
+    labels = sorted(y.unique().tolist())
+    return {
+        "n": int(len(df)),
+        "accuracy": float(accuracy_score(y, yhat)),
+        "macro_f1": float(f1_score(y, yhat, average="macro", labels=labels)),
+        "report": classification_report(y, yhat, labels=labels, zero_division=0, output_dict=True),
+    }
+
+
+def main():
+    root = Path(__file__).resolve().parents[1]
+    data_dir = pick_existing([root / "data_new", root / "data", root])
+    assert data_dir is not None
+
+    # --- expected core files ---
+    gold_path = pick_existing([
+        find_by_name(data_dir, "gold_clean_binary_only.csv") or Path(""),
+        find_by_name(data_dir, "gold_binary_clean_v1.csv") or Path(""),
+        find_by_name(data_dir, "gold_binary.csv") or Path(""),
+    ])
+
+    raw_pred_path = pick_existing([
+        find_by_name(data_dir, "preds_tfidf_raw_gold.csv") or Path(""),
+    ])
+
+    clean_pred_path = pick_existing([
+        # prefer cleaned_v1 tfidf if exists
+        find_by_name(data_dir, "preds_tfidf_cleaned_v1_gold.csv") or Path(""),
+        find_by_name(data_dir, "preds_tfidf_cleaned_gold.csv") or Path(""),
+        # fallback: if you used a different clean model, you can point to it here
+        find_by_name(data_dir, "preds_features_clean_v1_aligned.csv") or Path(""),
+    ])
+
+    merged_path = find_by_name(data_dir, "gold267_merged_preds_raw_clean.csv")
+
+    print("=== WHERE AM I LOOKING? ===")
+    print(f"Project root: {root}")
+    print(f"Data dir:     {data_dir}")
+
+    print("\n=== QUICK AUDIT (files) ===")
+    for name in [
+        "gold_clean_binary_only.csv",
+        "preds_tfidf_raw_gold.csv",
+        "preds_tfidf_cleaned_v1_gold.csv",
+        "preds_features_clean_v1_aligned.csv",
+        "gold267_merged_preds_raw_clean.csv",
+        "features_v1.csv",
+        "results_features_v1.json",
+        "results_neural_probe_raw.json",
+        "results_neural_probe_cleaned.json",
+        "feature_weights.csv",
+        "ablation_results.json",
+        "error_cases_30.xlsx",
+    ]:
+        p = find_by_name(data_dir, name)
+        print(f"{'OK ' if p and p.exists() else 'MISS'}  {name}")
+
+    if merged_path and merged_path.exists():
+        print(f"\nFound merged file: {merged_path}")
+        merged = pd.read_csv(merged_path)
+    else:
+        print("\nNo merged file found -> building a new one.")
+        if gold_path is None or raw_pred_path is None or clean_pred_path is None:
+            raise FileNotFoundError(
+                "Need gold + raw preds + clean preds. "
+                f"gold={gold_path}, raw={raw_pred_path}, clean={clean_pred_path}"
+            )
+
+        gold = pd.read_csv(gold_path)
+        rawp = pd.read_csv(raw_pred_path)
+        cleanp = pd.read_csv(clean_pred_path)
+
+        ensure_cols(gold, ["doc_id", "domain", "gold_label"], "gold")
+        raw_pred_col = detect_pred_col(rawp)
+        clean_pred_col = detect_pred_col(cleanp)
+        if raw_pred_col is None or clean_pred_col is None:
+            raise KeyError(
+                f"Cannot find pred col. raw cols={list(rawp.columns)} | clean cols={list(cleanp.columns)}"
+            )
+
+        # keep only needed columns; avoid duplicate gold_label columns from preds
+        raw_keep = ["doc_id", raw_pred_col]
+        clean_keep = ["doc_id", clean_pred_col]
+
+        rawp2 = rawp[raw_keep].rename(columns={raw_pred_col: "pred_raw"})
+        cleanp2 = cleanp[clean_keep].rename(columns={clean_pred_col: "pred_clean"})
+
+        merged = gold.merge(rawp2, on="doc_id", how="left").merge(cleanp2, on="doc_id", how="left")
+
+        out_path = data_dir / "gold267_merged_preds_raw_clean.csv"
+        merged.to_csv(out_path, index=False)
+        print(f"Saved merged file: {out_path}")
+
+    # --- evaluation ---
+    ensure_cols(merged, ["gold_label"], "merged")
+    if "pred_raw" not in merged.columns:
+        # maybe your merged file uses different naming
+        pred_raw_col = "pred" if "pred" in merged.columns else None
+        if pred_raw_col:
+            merged = merged.rename(columns={pred_raw_col: "pred_raw"})
+    if "pred_clean" not in merged.columns:
+        # same idea for clean
+        for c in ["pred_label", "pred", "pred_clean_v1", "pred_cleaned"]:
+            if c in merged.columns:
+                merged = merged.rename(columns={c: "pred_clean"})
+                break
+
+    print("\n=== EVAL (overall) ===")
+    if "pred_raw" in merged.columns and merged["pred_raw"].notna().any():
+        r = eval_binary(merged.dropna(subset=["pred_raw"]), "gold_label", "pred_raw")
+        print(f"RAW:   n={r['n']}  acc={r['accuracy']:.4f}  macro_f1={r['macro_f1']:.4f}")
+    else:
+        print("RAW:   missing pred_raw column or all NaN")
+
+    if "pred_clean" in merged.columns and merged["pred_clean"].notna().any():
+        c = eval_binary(merged.dropna(subset=["pred_clean"]), "gold_label", "pred_clean")
+        print(f"CLEAN: n={c['n']}  acc={c['accuracy']:.4f}  macro_f1={c['macro_f1']:.4f}")
+    else:
+        print("CLEAN: missing pred_clean column or all NaN")
+
+    # --- error_cases_30.xlsx ---
+    # define an error row if either raw OR clean is wrong (whichever columns exist)
+    def is_wrong(row) -> bool:
+        gold = str(row["gold_label"])
+        wrong = False
+        if "pred_raw" in merged.columns and pd.notna(row.get("pred_raw", None)):
+            wrong = wrong or (str(row["pred_raw"]) != gold)
+        if "pred_clean" in merged.columns and pd.notna(row.get("pred_clean", None)):
+            wrong = wrong or (str(row["pred_clean"]) != gold)
+        return wrong
+
+    if "domain" not in merged.columns:
+        merged["domain"] = "UNKNOWN"
+
+    err = merged[merged.apply(is_wrong, axis=1)].copy()
+    print(f"\nErrors available: {len(err)}")
+
+    if len(err) == 0:
+        print("No errors found -> skip error_cases_30.xlsx")
+        return
+
+    # stratified sample across domains (up to 10 per domain, then fill remaining)
+    random.seed(7)
+    samples = []
+    per_dom = 10
+    for dom, sub in err.groupby("domain"):
+        sub = sub.sample(min(per_dom, len(sub)), random_state=7)
+        samples.append(sub)
+    sampled = pd.concat(samples, axis=0) if samples else err.sample(min(30, len(err)), random_state=7)
+
+    if len(sampled) < 30 and len(err) > len(sampled):
+        remaining = err.drop(sampled.index, errors="ignore")
+        add_n = min(30 - len(sampled), len(remaining))
+        sampled = pd.concat([sampled, remaining.sample(add_n, random_state=7)], axis=0)
+
+    # keep nice columns
+    keep_cols = []
+    for c in ["doc_id", "domain", "gold_label", "pred_raw", "pred_clean", "text", "text_clean_v1", "source_subreddit"]:
+        if c in sampled.columns:
+            keep_cols.append(c)
+    sampled = sampled[keep_cols].reset_index(drop=True)
+
+    out_xlsx = data_dir / "error_cases_30.xlsx"
+    sampled.to_excel(out_xlsx, index=False)
+    print(f"Saved: {out_xlsx}")
+
+    # also save a small json summary if you want to cite numbers
+    summary = {"raw": r if "r" in locals() else None, "clean": c if "c" in locals() else None}
+    out_json = data_dir / "results_quick_summary.json"
+    with open(out_json, "w", encoding="utf-8") as f:
+        json.dump(summary, f, ensure_ascii=False, indent=2)
+    print(f"Saved: {out_json}")
+
+
+if __name__ == "__main__":
+    main()

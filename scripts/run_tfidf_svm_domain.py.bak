@@ -1,0 +1,190 @@
+import pandas as pd
+from pathlib import Path
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.svm import LinearSVC
+from sklearn.metrics import classification_report, f1_score
+import json
+from datetime import datetime
+import re
+import random
+
+HERE = Path(__file__).resolve().parent
+ROOT = HERE.parent
+DATA = ROOT / "data_new"
+
+SILVER_RAW = DATA / "silver_train.csv"
+GOLD_RAW   = DATA / "gold_to_annotate_V5_final.xlsx"
+
+SILVER_CLN = DATA / "silver_train_clean_v1.csv"
+GOLD_CLN   = DATA / "gold_labeled_300_clean_v1.csv"
+
+OUT_JSON = DATA / "results_tfidf_svm_domain.json"
+OUT_TXT  = DATA / "results_tfidf_svm_domain.txt"
+
+ARTIFACT_TOKENS = ["aita", "wibta", "yta", "nta", "esh", "nah", "edit", "update", "tldr", "throwaway"]
+
+
+def _peek_examples(df, text_col, tag, k=3, seed=7):
+    rng = random.Random(seed)
+    idxs = list(df.index)
+    rng.shuffle(idxs)
+    idxs = idxs[:k]
+
+    lines = [f"[{tag}] sample texts ({text_col}):"]
+    for i in idxs:
+        row = df.loc[i]
+        doc_id = None
+        for c in ["doc_id", "id", "post_id"]:
+            if c in df.columns:
+                doc_id = row[c]
+                break
+        snippet = str(row[text_col]).replace("\n", " ").strip()[:160]
+        lines.append(f"  id={doc_id if doc_id is not None else i} :: {snippet}")
+    return "\n".join(lines)
+
+def _artifact_rate(df, text_col):
+    # percentage of docs containing each token (rough check)
+    txt = df[text_col].astype(str).str.lower()
+    rates = {}
+    for tok in ARTIFACT_TOKENS:
+        pat = r"\b" + re.escape(tok) + r"\b"
+        rates[tok] = float(txt.str.contains(pat, regex=True).mean())
+    return rates
+
+def eval_once(train_df, gold_df, tag, train_text_col="text", gold_text_col="text"):
+    X_train = train_df[train_text_col].astype(str)
+    y_train = train_df["silver_label"].astype(str)
+
+    gold_bin = gold_df[gold_df["gold_label"].isin(["ADVICE", "STORY"])].copy()
+    
+    X_test = gold_bin[gold_text_col].astype(str)
+    y_test = gold_bin["gold_label"].astype(str)
+
+    vec = TfidfVectorizer(
+        lowercase=True,
+        stop_words="english",
+        ngram_range=(1, 3),
+        min_df=3,
+        max_df=0.95
+    )
+    Xtr = vec.fit_transform(X_train)
+    Xte = vec.transform(X_test)
+
+    clf = LinearSVC()
+    clf.fit(Xtr, y_train)
+    pred = clf.predict(Xte)
+
+    macro = f1_score(y_test, pred, average="macro")
+    report = classification_report(y_test, pred, digits=4)
+
+    # domain breakdown (use the same gold_text_col explicitly)
+    domain_scores = {}
+    for d, sub in gold_bin.groupby("domain"):
+        yd = sub["gold_label"].astype(str)
+        Xd = vec.transform(sub[gold_text_col].astype(str))
+        pd_ = clf.predict(Xd)
+        domain_scores[str(d)] = {
+            "n": int(len(sub)),
+            "macro_f1": float(f1_score(yd, pd_, average="macro"))
+        }
+
+    model_name = f"TFIDF({vec.ngram_range[0]}-{vec.ngram_range[1]})+LinearSVC"
+
+    # lightweight sanity checks
+    sanity = {
+        "train_text_col": train_text_col,
+        "gold_text_col": gold_text_col,
+        "artifact_doc_rate_gold": _artifact_rate(gold_bin, gold_text_col),
+        "vocab_size": int(len(vec.vocabulary_)),
+    }
+
+    return {
+        "tag": tag,
+        "model": model_name,
+        "train_n": int(len(train_df)),
+        "test_n_binary": int(len(gold_bin)),
+        "macro_f1": float(macro),
+        "domain_macro_f1": domain_scores,
+        "report": report,
+        "sanity": sanity,
+    }
+
+
+def pick_text_col(df):
+    for c in ["text_clean_v1", "text_clean", "clean_text", "text_cleaned", "text"]:
+        if c in df.columns:
+            return c
+    raise KeyError("No text column found (expected one of: text_clean_v1/text_clean/clean_text/text_cleaned/text)")
+
+def main():
+    silver_raw = pd.read_csv(SILVER_RAW, low_memory=False)
+    gold_raw = pd.read_excel(GOLD_RAW)
+
+    silver_cln = pd.read_csv(SILVER_CLN, low_memory=False)
+    gold_cln = pd.read_csv(GOLD_CLN, low_memory=False)
+
+    print("silver_cln columns:", list(silver_cln.columns)[:30])
+    print("gold_cln columns:", list(gold_cln.columns)[:30])
+
+
+    # choose which text column to use for each file
+    silver_raw_col = pick_text_col(silver_raw)   # usually "text"
+    gold_raw_col   = pick_text_col(gold_raw)     # usually "text"
+    silver_cln_col = pick_text_col(silver_cln)   # often "text_clean_v1"
+    gold_cln_col   = pick_text_col(gold_cln)     # often "text_clean_v1"
+
+    print("Using text cols:",
+          "silver_raw=", silver_raw_col,
+          "gold_raw=", gold_raw_col,
+          "silver_clean=", silver_cln_col,
+          "gold_clean=", gold_cln_col)
+    print("RAW has <AGE_GENDER>:", gold_raw[gold_raw_col].astype(str).str.contains("<AGE_GENDER>").mean())
+    print("CLEAN has <AGE_GENDER>:", gold_cln[gold_cln_col].astype(str).str.contains("<AGE_GENDER>").mean())
+    
+    # quick peek (use the chosen columns, not hard-coded "text")
+    print(_peek_examples(silver_raw, silver_raw_col, "SILVER_RAW"))
+    print(_peek_examples(silver_cln, silver_cln_col, "SILVER_CLEAN"))
+    print(_peek_examples(gold_raw, gold_raw_col, "GOLD_RAW"))
+    print(_peek_examples(gold_cln, gold_cln_col, "GOLD_CLEAN"))
+
+    # run eval using the chosen columns
+    r_raw = eval_once(
+        silver_raw, gold_raw, "RAW",
+        train_text_col=silver_raw_col,
+        gold_text_col=gold_raw_col
+    )
+    r_cln = eval_once(
+        silver_cln, gold_cln, "CLEANED",
+        train_text_col=silver_cln_col,
+        gold_text_col=gold_cln_col
+    )
+
+
+    # model name from vectorizer (avoid lying)
+    model_name = r_raw["model"]
+
+    out = {
+        "timestamp": datetime.now().isoformat(timespec="seconds"),
+        "model": model_name,
+        "results": {
+            "RAW": {k: v for k, v in r_raw.items() if k != "report"},
+            "CLEANED": {k: v for k, v in r_cln.items() if k != "report"},
+        }
+    }
+    OUT_JSON.write_text(json.dumps(out, indent=2), encoding="utf-8")
+
+    txt = []
+    txt.append("=== RAW (SVM) ===\n" + r_raw["report"] +
+               f"\nmacro_f1={r_raw['macro_f1']:.4f}\nDomain macro-F1: {r_raw['domain_macro_f1']}\n"
+               f"Sanity: {r_raw['sanity']}\n")
+    txt.append("\n=== CLEANED (SVM) ===\n" + r_cln["report"] +
+               f"\nmacro_f1={r_cln['macro_f1']:.4f}\nDomain macro-F1: {r_cln['domain_macro_f1']}\n"
+               f"Sanity: {r_cln['sanity']}\n")
+    OUT_TXT.write_text("\n".join(txt), encoding="utf-8")
+
+    print("\n".join(txt))
+    print("Wrote:", OUT_JSON)
+    print("Wrote:", OUT_TXT)
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,29 @@
+from pathlib import Path
+import pandas as pd
+
+ROOT = Path(__file__).resolve().parents[1]
+DATA = ROOT / "data_new"
+
+gold_raw = pd.read_csv(DATA / "gold_raw_norm_FROZEN.csv")
+gold_clean = pd.read_csv(DATA / "gold_clean_v1_FROZEN.csv")
+
+ID_COL = "doc_id"  # 如果你的列名不是这个，改成实际列名
+
+# clean里去掉 mixed
+gold_clean = gold_clean[gold_clean["gold_label"].isin(["ADVICE", "STORY"])].copy()
+
+need = gold_raw[[ID_COL, "domain", "gold_label"]].copy()
+clean_text = gold_clean[[ID_COL, "text_clean_v1"]].copy()
+
+merged = need.merge(clean_text, on=ID_COL, how="left")
+
+missing = merged["text_clean_v1"].isna().sum()
+if missing:
+    # 打印缺失id
+    print("Missing IDs example:", merged.loc[merged["text_clean_v1"].isna(), ID_COL].head(10).tolist())
+    raise ValueError(f"Missing cleaned text for {missing} rows. ID mismatch.")
+
+out = DATA / "gold_clean_v1_FROZEN.csv"
+merged.to_csv(out, index=False)
+print("Saved:", out, "rows=", len(merged))
+print(merged["gold_label"].value_counts())

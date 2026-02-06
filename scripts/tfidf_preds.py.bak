@@ -1,0 +1,232 @@
+from __future__ import annotations
+
+import json
+import re
+from dataclasses import dataclass
+from pathlib import Path
+from typing import List, Dict, Tuple
+
+import pandas as pd
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import classification_report, f1_score
+
+
+LABELS = ["ADVICE", "STORY"]  # binary eval; MIXED excluded
+
+
+@dataclass
+class Config:
+    model: str = "TFIDF+LogReg"
+    ngram_range: Tuple[int, int] = (1, 3)
+    min_df: int = 3
+    max_features: int = 200_000
+    C: float = 1.0
+    seed: int = 1004
+
+
+def get_repo_root() -> Path:
+    # scripts/xxx.py -> repo root is parent of scripts/
+    return Path(__file__).resolve().parents[1]
+
+
+def load_regex_patterns(regex_path: Path) -> List[str]:
+    pats = []
+    for line in regex_path.read_text(encoding="utf-8").splitlines():
+        s = line.strip()
+        if not s or s.startswith("#"):
+            continue
+        pats.append(s)
+    return pats
+
+
+def clean_text_v1(text: str, compiled: List[re.Pattern], raw_pats: List[str]) -> str:
+    if not isinstance(text, str):
+        text = "" if pd.isna(text) else str(text)
+    x = text
+
+    # Replace patterns; keep age/gender as placeholder, remove others
+    for pat_str, pat in zip(raw_pats, compiled):
+        is_age_gender = (r"\d{1,2}" in pat_str and "[FfMm]" in pat_str and ("[" in pat_str or "(" in pat_str))
+        if is_age_gender:
+            x = pat.sub(" <AGE_GENDER> ", x)
+        else:
+            x = pat.sub(" ", x)
+
+    # normalize whitespace
+    x = re.sub(r"\s+", " ", x).strip()
+    return x
+
+
+def macro_f1(y_true, y_pred) -> float:
+    return float(f1_score(y_true, y_pred, labels=LABELS, average="macro"))
+
+
+def eval_and_export(
+    *,
+    silver: pd.DataFrame,
+    gold: pd.DataFrame,
+    text_col: str,
+    cfg: Config,
+    regex_v1_path: Path,
+    out_pred_path: Path,
+    out_report_path: Path,
+    tag: str,
+) -> Dict:
+    # --- prepare texts ---
+    raw_pats = load_regex_patterns(regex_v1_path)
+    compiled = [re.compile(p) for p in raw_pats]
+
+    def maybe_clean(s: str) -> str:
+        if tag == "raw":
+            return s if isinstance(s, str) else ("" if pd.isna(s) else str(s))
+        return clean_text_v1(s, compiled, raw_pats)
+
+    X_train = silver[text_col].map(maybe_clean).tolist()
+    y_train = silver["silver_label"].astype(str).str.upper().tolist()
+
+    gold_bin = gold.copy()
+    gold_bin["gold_label"] = gold_bin["gold_label"].astype(str).str.upper()
+    gold_bin = gold_bin[gold_bin["gold_label"].isin(LABELS)].copy()
+
+    X_gold = gold_bin[text_col].map(maybe_clean).tolist()
+    y_gold = gold_bin["gold_label"].tolist()
+
+    # --- train ---
+    vec = TfidfVectorizer(
+        analyzer="word",
+        ngram_range=cfg.ngram_range,
+        min_df=cfg.min_df,
+        max_features=cfg.max_features,
+        lowercase=True,
+    )
+    Xtr = vec.fit_transform(X_train)
+
+    clf = LogisticRegression(
+        C=cfg.C,
+        max_iter=2000,
+        random_state=cfg.seed,
+        class_weight="balanced",
+        n_jobs=None,
+    )
+    clf.fit(Xtr, y_train)
+
+    # --- predict ---
+    Xg = vec.transform(X_gold)
+    y_pred = clf.predict(Xg)
+
+    # --- write per-item preds ---
+    pred_df = gold_bin.copy()
+    # keep minimal useful columns
+    keep_cols = [c for c in ["doc_id", "domain", "gold_label"] if c in pred_df.columns]
+    pred_out = pred_df[keep_cols].copy()
+    pred_out["pred_label"] = y_pred
+    out_pred_path.parent.mkdir(parents=True, exist_ok=True)
+    pred_out.to_csv(out_pred_path, index=False, encoding="utf-8")
+
+    # --- metrics ---
+    rep = classification_report(y_gold, y_pred, labels=LABELS, digits=4, output_dict=False)
+    overall = macro_f1(y_gold, y_pred)
+
+    by_domain = {}
+    if "domain" in gold_bin.columns:
+        for dom in sorted(gold_bin["domain"].astype(str).unique().tolist()):
+            sub = pred_out[pred_out["domain"].astype(str) == dom]
+            if len(sub) == 0:
+                continue
+            md = macro_f1(sub["gold_label"].tolist(), sub["pred_label"].tolist())
+            counts = sub["gold_label"].value_counts().to_dict()
+            by_domain[dom] = {"n": int(len(sub)), "macro_f1": md, "counts": counts}
+
+    payload = {
+        "tag": tag,
+        "config": cfg.__dict__,
+        "overall": {"n": int(len(pred_out)), "macro_f1": overall},
+        "by_domain": by_domain,
+        "report_text": rep,
+        "pred_file": str(out_pred_path),
+    }
+
+    out_report_path.write_text(
+        f"=== {tag.upper()} ===\n"
+        f"Config: {json.dumps(cfg.__dict__)}\n"
+        f"Overall: n={payload['overall']['n']} macro_f1={payload['overall']['macro_f1']:.4f}\n\n"
+        + rep
+        + "\n\nBy domain (gold, binary only; MIXED excluded):\n"
+        + "\n".join(
+            [f"- {d}: n={v['n']} macro_f1={v['macro_f1']:.4f} counts={v['counts']}" for d, v in payload["by_domain"].items()]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return payload
+
+
+def main():
+    root = get_repo_root()
+    data = root / "data_new"
+    scripts = root / "scripts"
+
+    # inputs
+    silver_path = data / "silver_train.csv"
+    gold_path = data / "gold_to_annotate_V5_final.xlsx"
+    regex_path = root / "spec" / "regex_v1.txt"
+
+    assert silver_path.exists(), f"Missing: {silver_path}"
+    assert gold_path.exists(), f"Missing: {gold_path}"
+    assert regex_path.exists(), f"Missing: {regex_path}"
+
+    cfg = Config()
+
+    silver = pd.read_csv(silver_path, low_memory=False)
+    gold = pd.read_excel(gold_path)
+
+    # sanity: required cols
+    for c in ["text", "silver_label"]:
+        if c not in silver.columns:
+            raise ValueError(f"silver_train.csv missing column: {c}")
+    for c in ["text", "gold_label"]:
+        if c not in gold.columns:
+            raise ValueError(f"gold excel missing column: {c}")
+
+    out_dir = data
+
+    # RAW
+    raw_payload = eval_and_export(
+        silver=silver,
+        gold=gold,
+        text_col="text",
+        cfg=cfg,
+        regex_v1_path=regex_path,
+        out_pred_path=out_dir / "preds_tfidf_raw_gold.csv",
+        out_report_path=out_dir / "tfidf_raw_report.txt",
+        tag="raw",
+    )
+
+    # CLEANED_V1
+    cln_payload = eval_and_export(
+        silver=silver,
+        gold=gold,
+        text_col="text",
+        cfg=cfg,
+        regex_v1_path=regex_path,
+        out_pred_path=out_dir / "preds_tfidf_cleaned_v1_gold.csv",
+        out_report_path=out_dir / "tfidf_cleaned_report.txt",
+        tag="cleaned_v1",
+    )
+
+    # write a machine-readable json summary too
+    (out_dir / "tfidf_preds_summary.json").write_text(
+        json.dumps({"raw": raw_payload, "cleaned_v1": cln_payload}, indent=2),
+        encoding="utf-8",
+    )
+
+    print(f"Wrote: {out_dir / 'preds_tfidf_raw_gold.csv'}")
+    print(f"Wrote: {out_dir / 'preds_tfidf_cleaned_gold.csv'}")
+    print(f"Wrote: {out_dir / 'tfidf_raw_report.txt'}")
+    print(f"Wrote: {out_dir / 'tfidf_cleaned_report.txt'}")
+    print(f"Wrote: {out_dir / 'tfidf_preds_summary.json'}")
+
+
+if __name__ == "__main__":
+    main()

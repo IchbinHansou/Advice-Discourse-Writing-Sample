@@ -1,0 +1,325 @@
+from __future__ import annotations
+
+import json
+import math
+import os
+import random
+import re
+from collections import Counter, defaultdict
+from pathlib import Path
+from typing import Dict, List, Tuple
+
+import numpy as np
+import pandas as pd
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+
+try:
+    from scipy.stats import mannwhitneyu
+    SCIPY_OK = True
+except Exception:
+    SCIPY_OK = False
+
+
+SEED = 1004
+DOMAINS = ["aita", "confession", "ra"]
+LABELS = ["ADVICE", "STORY"]
+
+TOKEN_RE = re.compile(r"[A-Za-z']+")
+
+
+def repo_root() -> Path:
+    return Path(__file__).resolve().parents[1]
+
+
+def normalize_label(x) -> str | None:
+    if x is None or (isinstance(x, float) and np.isnan(x)):
+        return None
+    s = str(x).strip().upper()
+    return s if s in LABELS else None
+
+
+def tokenize(text: str) -> List[str]:
+    toks = TOKEN_RE.findall(str(text).lower())
+    return toks
+
+
+class InterpTrigramLM:
+    """
+    Word LM with add-alpha smoothing for each order + linear interpolation:
+
+        p = w3*p3 + w2*p2 + w1*p1
+
+    where:
+        p1(w) = (c(w)+a) / (N + aV)
+        p2(w|u) = (c(u,w)+a) / (c(u,*) + aV)
+        p3(w|u,v) = (c(u,v,w)+a) / (c(u,v,*) + aV)
+
+    This is deliberately simple + dependency-free.
+    """
+
+    def __init__(self, alpha: float = 0.5, w1: float = 0.1, w2: float = 0.3, w3: float = 0.6):
+        self.alpha = float(alpha)
+        self.w1, self.w2, self.w3 = float(w1), float(w2), float(w3)
+
+        self.uni = Counter()
+        self.bi = Counter()
+        self.tri = Counter()
+        self.ctx1 = Counter()   # counts of u
+        self.ctx2 = Counter()   # counts of (u,v)
+        self.N = 0
+        self.V = 0
+
+    def fit(self, texts: List[str]):
+        for t in texts:
+            toks = tokenize(t)
+            if len(toks) == 0:
+                continue
+            # add BOS/BOS and EOS
+            seq = ["<BOS>", "<BOS>"] + toks + ["<EOS>"]
+            for i in range(2, len(seq)):
+                w = seq[i]
+                u = seq[i - 1]
+                v = seq[i - 2]
+                self.uni[w] += 1
+                self.ctx1[u] += 1
+                self.bi[(u, w)] += 1
+                self.ctx2[(v, u)] += 1
+                self.tri[(v, u, w)] += 1
+                self.N += 1
+
+        # vocabulary: all observed unigrams + special tokens
+        self.V = len(self.uni)
+
+    def _p1(self, w: str) -> float:
+        a = self.alpha
+        return (self.uni[w] + a) / (self.N + a * self.V)
+
+    def _p2(self, u: str, w: str) -> float:
+        a = self.alpha
+        denom = self.ctx1[u] + a * self.V
+        return (self.bi[(u, w)] + a) / denom if denom > 0 else self._p1(w)
+
+    def _p3(self, v: str, u: str, w: str) -> float:
+        a = self.alpha
+        denom = self.ctx2[(v, u)] + a * self.V
+        return (self.tri[(v, u, w)] + a) / denom if denom > 0 else self._p2(u, w)
+
+    def cross_entropy_bits(self, text: str) -> float:
+        toks = tokenize(text)
+        if len(toks) == 0:
+            return float("nan")
+        seq = ["<BOS>", "<BOS>"] + toks + ["<EOS>"]
+        neglog2 = 0.0
+        count = 0
+        for i in range(2, len(seq)):
+            w = seq[i]
+            u = seq[i - 1]
+            v = seq[i - 2]
+            p = self.w3 * self._p3(v, u, w) + self.w2 * self._p2(u, w) + self.w1 * self._p1(w)
+            p = max(p, 1e-12)
+            neglog2 += -math.log(p, 2)
+            count += 1
+        return neglog2 / max(1, count)
+
+
+def find_training_corpus(data_dir: Path) -> Tuple[pd.DataFrame, str]:
+    """
+    Returns (df, text_col).
+    Preference order:
+      1) thesis_dataset_master_raw.csv (text)
+      2) silver_train_raw.csv / silver_train.csv (text)
+      3) gold_binary.csv (text) as fallback
+    """
+    candidates = [
+        (data_dir / "thesis_dataset_master_raw.csv", "text"),
+        (data_dir / "silver_train_raw.csv", "text"),
+        (data_dir / "silver_train.csv", "text"),
+        (data_dir / "gold_binary.csv", "text"),
+    ]
+    for p, col in candidates:
+        if p.exists():
+            df = pd.read_csv(p, low_memory=False)
+            if col in df.columns:
+                return df, col
+    raise FileNotFoundError("No suitable training corpus found in data_new/. Expected thesis_dataset_master_raw.csv or silver_train*.csv or gold_binary.csv")
+
+
+def load_gold_binary(data_dir: Path) -> pd.DataFrame:
+    p = data_dir / "gold_binary.csv"
+    if not p.exists():
+        raise FileNotFoundError(f"Missing {p}. Expected gold_binary.csv.")
+    df = pd.read_csv(p, low_memory=False)
+    df["gold_label"] = df["gold_label"].map(normalize_label)
+    df = df[df["gold_label"].isin(LABELS)].copy()
+    df["domain"] = df["domain"].astype(str).str.lower()
+    df["text"] = df["text"].astype(str)
+    return df
+
+
+def cliffs_delta(x: np.ndarray, y: np.ndarray) -> float:
+    # delta = ( #x>y - #x<y ) / (n_x*n_y)
+    x = np.asarray(x)
+    y = np.asarray(y)
+    nx, ny = len(x), len(y)
+    if nx == 0 or ny == 0:
+        return float("nan")
+    gt = 0
+    lt = 0
+    for a in x:
+        gt += int(np.sum(a > y))
+        lt += int(np.sum(a < y))
+    return float((gt - lt) / (nx * ny))
+
+
+def permutation_test(x: np.ndarray, y: np.ndarray, n_perm: int = 5000, seed: int = SEED) -> Dict[str, float]:
+    """
+    Two-sided permutation test on difference in medians (robust).
+    """
+    rng = np.random.default_rng(seed)
+    x = np.asarray(x); y = np.asarray(y)
+    obs = float(np.median(x) - np.median(y))
+    pooled = np.concatenate([x, y])
+    n1 = len(x)
+    cnt = 0
+    for _ in range(n_perm):
+        rng.shuffle(pooled)
+        x2 = pooled[:n1]
+        y2 = pooled[n1:]
+        d = float(np.median(x2) - np.median(y2))
+        if abs(d) >= abs(obs):
+            cnt += 1
+    p = (cnt + 1) / (n_perm + 1)
+    return {"stat": obs, "p_value": float(p), "n_perm": int(n_perm)}
+
+
+def compute_dh_for_gold(gold: pd.DataFrame, lm: InterpTrigramLM, k_shuffles: int = 5) -> pd.DataFrame:
+    rows = []
+    for i, r in gold.reset_index(drop=True).iterrows():
+        text = r["text"]
+        toks = tokenize(text)
+        if len(toks) < 5:
+            continue
+
+        h_orig = lm.cross_entropy_bits(text)
+
+        # shuffled entropy: average over K shuffles for stability
+        rng = random.Random(SEED + i)
+        hs = []
+        for _ in range(k_shuffles):
+            toks2 = toks.copy()
+            rng.shuffle(toks2)
+            shuf_text = " ".join(toks2)
+            hs.append(lm.cross_entropy_bits(shuf_text))
+        h_shuf = float(np.mean(hs))
+
+        rows.append({
+            "domain": r["domain"],
+            "gold_label": r["gold_label"],
+            "n_tokens": len(toks),
+            "H_orig_bits": float(h_orig),
+            "H_shuf_bits": float(h_shuf),
+            "dH_bits": float(h_shuf - h_orig),
+        })
+    return pd.DataFrame(rows)
+
+
+def plot_fig1(df: pd.DataFrame, out_png: Path):
+    # boxplot ΔH by label
+    labels = ["ADVICE", "STORY"]
+    data = [df[df["gold_label"] == lab]["dH_bits"].values for lab in labels]
+
+    plt.figure(figsize=(6.2, 4.0))
+    plt.boxplot(data, tick_labels=labels, showfliers=False)
+    # jitter points
+    rng = np.random.default_rng(SEED)
+    for i, lab in enumerate(labels, start=1):
+        ys = df[df["gold_label"] == lab]["dH_bits"].values
+        xs = rng.normal(loc=i, scale=0.04, size=len(ys))
+        plt.scatter(xs, ys, s=10, alpha=0.6)
+
+    plt.ylabel(r"$\Delta H$ (bits/token)")
+    # plt.title(r"Distribution of Sequential Surprisal Reduction ($\Delta H$)")
+    plt.tight_layout()
+    plt.savefig(out_png, dpi=200)
+    plt.close()
+
+
+def stats_block(df: pd.DataFrame) -> Dict[str, float]:
+    x = df[df["gold_label"] == "ADVICE"]["dH_bits"].dropna().values
+    y = df[df["gold_label"] == "STORY"]["dH_bits"].dropna().values
+
+    out: Dict[str, float] = {
+        "n_advice": int(len(x)),
+        "n_story": int(len(y)),
+        "median_advice": float(np.median(x)) if len(x) else float("nan"),
+        "median_story": float(np.median(y)) if len(y) else float("nan"),
+        "mean_advice": float(np.mean(x)) if len(x) else float("nan"),
+        "mean_story": float(np.mean(y)) if len(y) else float("nan"),
+        "cliffs_delta": float(cliffs_delta(x, y)),
+    }
+
+    if SCIPY_OK and len(x) and len(y):
+        u = mannwhitneyu(x, y, alternative="two-sided")
+        out["mannwhitney_U"] = float(u.statistic)
+        out["mannwhitney_p"] = float(u.pvalue)
+    else:
+        out["mannwhitney_U"] = float("nan")
+        out["mannwhitney_p"] = float("nan")
+
+    # permutation test on median difference
+    if len(x) and len(y):
+        perm = permutation_test(x, y, n_perm=5000, seed=SEED)
+        out["perm_stat_median_diff"] = float(perm["stat"])
+        out["perm_p"] = float(perm["p_value"])
+    else:
+        out["perm_stat_median_diff"] = float("nan")
+        out["perm_p"] = float("nan")
+
+    return out
+
+
+def main():
+    root = repo_root()
+    data_dir = root / "data_new"
+    data_dir.mkdir(parents=True, exist_ok=True)
+
+    gold = load_gold_binary(data_dir)
+
+    train_df, train_col = find_training_corpus(data_dir)
+    train_texts = train_df[train_col].astype(str).tolist()
+
+    lm = InterpTrigramLM(alpha=0.5, w1=0.1, w2=0.3, w3=0.6)
+    lm.fit(train_texts)
+
+    dh = compute_dh_for_gold(gold, lm, k_shuffles=5)
+
+    out_csv = data_dir / "gold_surprisal_dh.csv"
+    dh.to_csv(out_csv, index=False, encoding="utf-8")
+
+    out_png = data_dir / "fig1_surprisal_distribution.png"
+    plot_fig1(dh, out_png)
+
+    stats = {
+        "definition": "ΔH = H_shuffled - H_original (bits/token), using interpolated trigram LM with add-alpha smoothing; shuffled is token-level within-post shuffle averaged over K=5.",
+        "lm_config": {"order": 3, "alpha": 0.5, "interp": [0.1, 0.3, 0.6], "seed": SEED},
+        "overall": stats_block(dh),
+        "by_domain": {},
+    }
+
+    for dom in DOMAINS:
+        sub = dh[dh["domain"] == dom].copy()
+        stats["by_domain"][dom] = stats_block(sub)
+
+    out_json = data_dir / "stats_surprisal_tests.json"
+    out_json.write_text(json.dumps(stats, indent=2), encoding="utf-8")
+
+    print("Wrote:", out_csv)
+    print("Wrote:", out_png)
+    print("Wrote:", out_json)
+    print("Done.")
+
+
+if __name__ == "__main__":
+    main()

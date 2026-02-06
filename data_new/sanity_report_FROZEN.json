@@ -1,0 +1,239 @@
+{
+  "timestamp": "2026-02-05T23:08:41",
+  "files": {
+    "gold_raw_norm": "C:\\Users\\PC\\OneDrive\\\u684c\u9762\\Saarland Writing Sample\\data_new\\gold_raw_norm_FROZEN.csv",
+    "gold_clean_v1": "C:\\Users\\PC\\OneDrive\\\u684c\u9762\\Saarland Writing Sample\\data_new\\gold_clean_v1_FROZEN.csv",
+    "silver_raw_norm": "C:\\Users\\PC\\OneDrive\\\u684c\u9762\\Saarland Writing Sample\\data_new\\silver_train_raw_norm_FROZEN.csv",
+    "silver_clean_v1": "C:\\Users\\PC\\OneDrive\\\u684c\u9762\\Saarland Writing Sample\\data_new\\silver_train_clean_v1_FROZEN.csv"
+  },
+  "row_counts": {
+    "gold_raw": 300,
+    "gold_clean": 300,
+    "silver_raw": 1630,
+    "silver_clean": 1630
+  },
+  "dupes_doc_id": {
+    "gold_raw": 0,
+    "gold_clean": 0,
+    "silver_raw": 0,
+    "silver_clean": 0
+  },
+  "alignment": {
+    "gold_raw_vs_clean": true,
+    "silver_raw_vs_clean": true
+  },
+  "leakage_overlap_doc_id": {
+    "raw_norm": 0,
+    "clean_v1": 0
+  },
+  "gold_label_counts_overall": {
+    "ADVICE": 147,
+    "STORY": 131,
+    "MIXED": 22
+  },
+  "gold_label_counts_by_domain": {
+    "ADVICE": {
+      "aita": 28,
+      "confession": 30,
+      "ra": 89
+    },
+    "MIXED": {
+      "aita": 8,
+      "confession": 12,
+      "ra": 2
+    },
+    "STORY": {
+      "aita": 64,
+      "confession": 58,
+      "ra": 9
+    }
+  },
+  "gold_binary_n": 278,
+  "gold_binary_label_counts": {
+    "ADVICE": 147,
+    "STORY": 131
+  },
+  "changed_ratio_rawnorm_to_clean": {
+    "gold": 0.53,
+    "silver": 0.35828220858895704
+  },
+  "marker_rates": {
+    "gold_raw_norm": {
+      "aita_acronym": 0.3333333333333333,
+      "verdicts": 0.0033333333333333335,
+      "tldr_edit_update": 0.18333333333333332,
+      "throwaway": 0.006666666666666667,
+      "age_gender_bracket": 0.25,
+      "age_gender_plain": 0.26666666666666666,
+      "age_gender_any": 0.26666666666666666,
+      "has_age_gender_placeholder": 0.0
+    },
+    "gold_clean_v1": {
+      "aita_acronym": 0.0,
+      "verdicts": 0.0,
+      "tldr_edit_update": 0.0,
+      "throwaway": 0.006666666666666667,
+      "age_gender_bracket": 0.0,
+      "age_gender_plain": 0.0,
+      "age_gender_any": 0.0,
+      "has_age_gender_placeholder": 0.37
+    },
+    "silver_raw_norm": {
+      "aita_acronym": 0.0006134969325153375,
+      "verdicts": 0.003067484662576687,
+      "tldr_edit_update": 0.11349693251533742,
+      "throwaway": 0.014723926380368098,
+      "age_gender_bracket": 0.18895705521472392,
+      "age_gender_plain": 0.2184049079754601,
+      "age_gender_any": 0.2184049079754601,
+      "has_age_gender_placeholder": 0.0
+    },
+    "silver_clean_v1": {
+      "aita_acronym": 0.0,
+      "verdicts": 0.0,
+      "tldr_edit_update": 0.0,
+      "throwaway": 0.014723926380368098,
+      "age_gender_bracket": 0.0,
+      "age_gender_plain": 0.0,
+      "age_gender_any": 0.0,
+      "has_age_gender_placeholder": 0.3128834355828221
+    }
+  },
+  "preds_sanity_optional": {
+    "found": true,
+    "raw_pred_file": "preds_tfidf_raw_gold.csv",
+    "clean_pred_file": "preds_features_clean_v1_aligned.csv",
+    "overall": {
+      "raw_macro_f1": 0.6516072004826512,
+      "clean_macro_f1": 0.6417846540306005,
+      "raw_cm": [
+        [
+          89,
+          46
+        ],
+        [
+          47,
+          85
+        ]
+      ],
+      "clean_cm": [
+        [
+          69,
+          66
+        ],
+        [
+          28,
+          104
+        ]
+      ]
+    },
+    "per_domain": {
+      "aita": {
+        "n": 87,
+        "label_counts": {
+          "STORY": 57,
+          "ADVICE": 30
+        },
+        "raw": {
+          "macro_f1": 0.48270270270270266,
+          "cm": [
+            [
+              15,
+              15
+            ],
+            [
+              29,
+              28
+            ]
+          ]
+        },
+        "clean": {
+          "macro_f1": 0.5229032258064517,
+          "cm": [
+            [
+              8,
+              22
+            ],
+            [
+              12,
+              45
+            ]
+          ]
+        }
+      },
+      "confession": {
+        "n": 86,
+        "label_counts": {
+          "STORY": 63,
+          "ADVICE": 23
+        },
+        "raw": {
+          "macro_f1": 0.5157455683003128,
+          "cm": [
+            [
+              4,
+              19
+            ],
+            [
+              8,
+              55
+            ]
+          ]
+        },
+        "clean": {
+          "macro_f1": 0.6863802124623434,
+          "cm": [
+            [
+              15,
+              8
+            ],
+            [
+              15,
+              48
+            ]
+          ]
+        }
+      },
+      "ra": {
+        "n": 94,
+        "label_counts": {
+          "ADVICE": 82,
+          "STORY": 12
+        },
+        "raw": {
+          "macro_f1": 0.5090218423551757,
+          "cm": [
+            [
+              70,
+              12
+            ],
+            [
+              10,
+              2
+            ]
+          ]
+        },
+        "clean": {
+          "macro_f1": 0.5430298252529234,
+          "cm": [
+            [
+              46,
+              36
+            ],
+            [
+              1,
+              11
+            ]
+          ]
+        }
+      }
+    },
+    "intuition_only_averages": {
+      "unweighted_avg_domain_raw": 0.5024900377860637,
+      "unweighted_avg_domain_clean": 0.5841044211739062,
+      "weighted_avg_domain_raw": 0.5026116374170357,
+      "weighted_avg_domain_clean": 0.582644503710478,
+      "note": "These averages are NOT equal to pooled overall macro-F1. Domain-slice macro-F1 can be much lower when a domain slice is highly imbalanced."
+    }
+  }
+}

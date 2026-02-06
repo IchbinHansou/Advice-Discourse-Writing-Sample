@@ -1,0 +1,15 @@
+import pandas as pd
+
+GOLD_XLSX = "gold_to_annotate_V3.xlsx"   # 你现在已有的
+OUT_CSV   = "gold_ids.csv"
+
+gold = pd.read_excel(GOLD_XLSX)
+
+
+gold["doc_id"] = gold["doc_id"].astype(str)
+gold["domain"] = gold["domain"].astype(str)
+
+gold[["doc_id","domain"]].drop_duplicates().to_csv(OUT_CSV, index=False)
+
+print("wrote", OUT_CSV, "rows:", len(gold[["doc_id","domain"]].drop_duplicates()))
+print(gold["domain"].value_counts())

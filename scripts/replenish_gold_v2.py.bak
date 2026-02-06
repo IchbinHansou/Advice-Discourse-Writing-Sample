@@ -1,0 +1,138 @@
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]   # scripts/ 的上一级 = 项目根目录
+DATA = ROOT / "data_new"
+
+import pandas as pd
+import numpy as np
+
+# ====== CONFIG ======
+GOLD_PATH    = "gold_to_annotate_V5_final.xlsx"
+DROPPED_PATH = "dropped_gold_v3.xlsx"
+POOL_PATH    = "dataset_raw_submissions_only_safe.csv"
+TARGET_TOTAL = 300
+OUT_GOLD = "gold_to_annotate_V5_final.xlsx"
+OUT_LOG  = "gold_replenishment_log_V5_from_v3.csv"
+SEED = 1004
+# ====================
+
+REQ_COLS = ["doc_id", "domain", "source_subreddit", "text"]
+
+def _normalize_cols(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    df.columns = [c.strip() for c in df.columns]
+    return df
+
+def _ensure_cols(df: pd.DataFrame, name: str, cols=REQ_COLS):
+    missing = [c for c in cols if c not in df.columns]
+    if missing:
+        raise ValueError(f"{name} missing columns: {missing}. Existing: {list(df.columns)}")
+
+def main():
+    np.random.seed(SEED)
+
+    gold = _normalize_cols(pd.read_excel(GOLD_PATH))
+    dropped = _normalize_cols(pd.read_excel(DROPPED_PATH))
+
+    # pool 用低内存关闭，减少 dtype warning 干扰
+    pool = pd.read_csv(POOL_PATH, low_memory=False)
+    pool = _normalize_cols(pool)
+
+    _ensure_cols(gold, "gold")
+    _ensure_cols(dropped, "dropped_v2")
+    _ensure_cols(pool, "pool")
+
+    # 类型统一
+    for df in (gold, dropped, pool):
+        df["doc_id"] = df["doc_id"].astype(str)
+        df["domain"] = df["domain"].astype(str)
+        df["source_subreddit"] = df["source_subreddit"].astype(str)
+
+    # 1) 计算需要补抽的分层配额：按 domain + source_subreddit
+    quota = (
+        dropped.groupby(["domain", "source_subreddit"])
+        .size()
+        .reset_index(name="need")
+    )
+
+    need_total = int(quota["need"].sum())
+    current_n = len(gold)
+    expected_target = current_n + need_total
+
+    if expected_target != TARGET_TOTAL:
+        # 这里不直接失败，因为你可能未来改成别的 target
+        print(f"[WARN] current gold rows={current_n}, dropped_v2 rows={need_total}, "
+              f"so expected after replenish={expected_target}, but TARGET_TOTAL={TARGET_TOTAL}")
+
+    # 2) 从 pool 中排除：已在 gold 的、以及 dropped 的 doc_id（避免回抽）
+    gold_ids = set(gold["doc_id"].tolist())
+    dropped_ids = set(dropped["doc_id"].tolist())
+
+    pool_filtered = pool[~pool["doc_id"].isin(gold_ids.union(dropped_ids))].copy()
+
+    # 3) 逐层抽样
+    picked_rows = []
+    logs = []
+
+    for _, row in quota.iterrows():
+        dom = row["domain"]
+        sub = row["source_subreddit"]
+        need = int(row["need"])
+
+        candidates = pool_filtered[
+            (pool_filtered["domain"] == dom) &
+            (pool_filtered["source_subreddit"] == sub)
+        ].copy()
+
+        if len(candidates) < need:
+            raise ValueError(
+                f"Not enough candidates for layer (domain={dom}, source_subreddit={sub}). "
+                f"Need={need}, Available={len(candidates)}. "
+                f"建议：放宽层级（只按domain补），或扩大pool。"
+            )
+
+        picked = candidates.sample(n=need, random_state=SEED)
+        picked_rows.append(picked)
+
+        # 从 pool_filtered 移除已抽到的，避免别的层（万一有重复字段）重复抽
+        pool_filtered = pool_filtered[~pool_filtered["doc_id"].isin(picked["doc_id"])]
+
+        logs.append({
+            "domain": dom,
+            "source_subreddit": sub,
+            "need": need,
+            "picked": need,
+            "picked_doc_ids": "|".join(picked["doc_id"].astype(str).tolist())
+        })
+
+    picked_df = pd.concat(picked_rows, ignore_index=True) if picked_rows else pd.DataFrame(columns=gold.columns)
+
+    # 4) 合并成新gold
+    gold_replenished = pd.concat([gold, picked_df], ignore_index=True)
+
+    # 5) 最终一致性检查
+    # doc_id 必须唯一
+    dup = gold_replenished["doc_id"].duplicated().sum()
+    if dup > 0:
+        # 这里直接失败，因为 gold 不能有重复doc
+        raise ValueError(f"Duplicate doc_id found after merge: {dup}")
+
+    # 列顺序：把 gold 的列优先，pool多出来的列放后面
+    gold_cols = list(gold.columns)
+    extra_cols = [c for c in gold_replenished.columns if c not in gold_cols]
+    gold_replenished = gold_replenished[gold_cols + extra_cols]
+
+    # 6) 输出
+    gold_replenished.to_excel(OUT_GOLD, index=False)
+    pd.DataFrame(logs).to_csv(OUT_LOG, index=False, encoding="utf-8-sig")
+
+    print("Done.")
+    print("Old gold rows:", current_n)
+    print("Dropped_v2 rows:", need_total)
+    print("Picked:", len(picked_df))
+    print("New gold rows:", len(gold_replenished))
+    print("New gold:", OUT_GOLD)
+    print("Log:", OUT_LOG)
+
+if __name__ == "__main__":
+    main()

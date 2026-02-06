@@ -1,0 +1,21 @@
+=== RAW ===
+Config: {"model": "TFIDF+LogReg", "ngram_range": [1, 3], "min_df": 3, "max_features": 200000, "C": 1.0, "seed": 1004}
+Overall: n=278 macro_f1=0.6291
+  ADVICE P=0.6571 R=0.6259 F1=0.6411 support=147
+  STORY  P=0.6014 R=0.6336 F1=0.6171 support=131
+
+By domain (gold, binary only; MIXED excluded):
+- aita: n=92 macro_f1=0.4437 counts={'STORY': 64, 'ADVICE': 28}
+- confession: n=88 macro_f1=0.4753 counts={'STORY': 58, 'ADVICE': 30}
+- ra: n=98 macro_f1=0.4828 counts={'ADVICE': 89, 'STORY': 9}
+
+=== CLEANED_V1 ===
+Config: {"model": "TFIDF+LogReg", "ngram_range": [1, 3], "min_df": 3, "max_features": 200000, "C": 1.0, "seed": 1004}
+Overall: n=278 macro_f1=0.6217
+  ADVICE P=0.6479 R=0.6259 F1=0.6367 support=147
+  STORY  P=0.5956 R=0.6183 F1=0.6067 support=131
+
+By domain (gold, binary only; MIXED excluded):
+- aita: n=92 macro_f1=0.4261 counts={'STORY': 64, 'ADVICE': 28}
+- confession: n=88 macro_f1=0.4996 counts={'STORY': 58, 'ADVICE': 30}
+- ra: n=98 macro_f1=0.4777 counts={'ADVICE': 89, 'STORY': 9}

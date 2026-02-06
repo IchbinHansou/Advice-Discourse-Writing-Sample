@@ -1,0 +1,19 @@
+=== RAW_NORM_FROZEN ===
+Model: TFIDF(word 1-3)+LogReg
+Config: {"model": "TFIDF(word 1-3)+LogReg", "ngram_range": [1, 3], "min_df": 3, "max_df": 0.95, "stop_words": "english", "max_iter": 2000, "C": 1.0, "seed": 1004}
+Overall macro_f1: 0.613984  n=278  label_counts={'ADVICE': 147, 'STORY': 131}
+
+              precision    recall  f1-score   support
+
+      ADVICE     0.6370    0.6327    0.6348       147
+       STORY     0.5909    0.5954    0.5932       131
+
+    accuracy                         0.6151       278
+   macro avg     0.6139    0.6140    0.6140       278
+weighted avg     0.6153    0.6151    0.6152       278
+
+
+By domain:
+- aita: {'n': 92, 'macro_f1': 0.36351498968321394, 'counts': {'STORY': 64, 'ADVICE': 28}}
+- confession: {'n': 88, 'macro_f1': 0.5071364046973803, 'counts': {'STORY': 58, 'ADVICE': 30}}
+- ra: {'n': 98, 'macro_f1': 0.49333333333333335, 'counts': {'ADVICE': 89, 'STORY': 9}}

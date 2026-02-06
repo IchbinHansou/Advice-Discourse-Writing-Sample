@@ -1,0 +1,26 @@
+=== RAW ===
+              precision    recall  f1-score   support
+
+      ADVICE     0.6370    0.6327    0.6348       147
+       STORY     0.5909    0.5954    0.5932       131
+
+    accuracy                         0.6151       278
+   macro avg     0.6139    0.6140    0.6140       278
+weighted avg     0.6153    0.6151    0.6152       278
+
+macro_f1=0.6140
+confusion_matrix(['ADVICE', 'STORY'])=[[93, 54], [53, 78]]
+
+
+=== CLEANED_v1 ===
+              precision    recall  f1-score   support
+
+      ADVICE     0.6447    0.6667    0.6555       147
+       STORY     0.6111    0.5878    0.5992       131
+
+    accuracy                         0.6295       278
+   macro avg     0.6279    0.6272    0.6274       278
+weighted avg     0.6289    0.6295    0.6290       278
+
+macro_f1=0.6274
+confusion_matrix(['ADVICE', 'STORY'])=[[98, 49], [54, 77]]

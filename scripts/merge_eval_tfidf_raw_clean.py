@@ -1,0 +1,118 @@
+from __future__ import annotations
+
+import os
+from pathlib import Path
+import pandas as pd
+from sklearn.metrics import classification_report, f1_score, confusion_matrix
+
+
+LABELS = ["ADVICE", "STORY"]
+
+
+def repo_root() -> Path:
+    return Path(__file__).resolve().parents[1]
+
+
+def find_pred_col(df: pd.DataFrame) -> str | None:
+    # common names you used across files
+    candidates = ["pred_label", "pred", "prediction", "y_pred", "predicted_label"]
+    for c in candidates:
+        if c in df.columns:
+            return c
+    return None
+
+
+def macro_f1(y_true, y_pred) -> float:
+    return float(f1_score(y_true, y_pred, labels=LABELS, average="macro"))
+
+
+def main():
+    root = repo_root()
+    data_dir = root / "data_new"
+
+    gold_path = data_dir / "gold_clean_v1_FROZEN.csv"
+    raw_pred_path = data_dir / "preds_tfidf_raw_gold.csv"
+    clean_pred_path = data_dir / "preds_tfidf_cleaned_v1_gold.csv"  # you showed this exists
+
+    assert gold_path.exists(), f"Missing gold: {gold_path}"
+    assert raw_pred_path.exists(), f"Missing raw preds: {raw_pred_path}"
+    assert clean_pred_path.exists(), f"Missing cleaned preds: {clean_pred_path}"
+
+    gold = pd.read_csv(gold_path, low_memory=False)
+    rawp = pd.read_csv(raw_pred_path, low_memory=False)
+    clnp = pd.read_csv(clean_pred_path, low_memory=False)
+
+    # normalize label casing
+    gold["gold_label"] = gold["gold_label"].astype(str).str.upper()
+    gold = gold[gold["gold_label"].isin(LABELS)].copy()
+
+    # pick prediction columns
+    raw_col = find_pred_col(rawp)
+    cln_col = find_pred_col(clnp)
+    if raw_col is None:
+        raise KeyError(f"No pred column found in {raw_pred_path.name}. Columns={list(rawp.columns)}")
+    if cln_col is None:
+        raise KeyError(f"No pred column found in {clean_pred_path.name}. Columns={list(clnp.columns)}")
+
+    # ensure doc_id exists
+    for df, name in [(gold, "gold"), (rawp, "raw preds"), (clnp, "clean preds")]:
+        if "doc_id" not in df.columns:
+            raise KeyError(f"{name} missing doc_id. Columns={list(df.columns)}")
+
+    rawp = rawp[["doc_id", raw_col]].copy().rename(columns={raw_col: "pred_raw"})
+    clnp = clnp[["doc_id", cln_col]].copy().rename(columns={cln_col: "pred_clean"})
+
+    rawp["pred_raw"] = rawp["pred_raw"].astype(str).str.upper()
+    clnp["pred_clean"] = clnp["pred_clean"].astype(str).str.upper()
+
+    merged = gold.merge(rawp, on="doc_id", how="left").merge(clnp, on="doc_id", how="left")
+
+    # quick missing check
+    miss_raw = merged["pred_raw"].isna().mean()
+    miss_cln = merged["pred_clean"].isna().mean()
+    print(f"[merge] rows={len(merged)}  missing pred_raw={miss_raw:.3f}  missing pred_clean={miss_cln:.3f}")
+
+    # drop rows without preds (should be 0 if aligned)
+    merged_eval = merged.dropna(subset=["pred_raw", "pred_clean"]).copy()
+
+    def report(tag: str, pred_col: str):
+        y_true = merged_eval["gold_label"].tolist()
+        y_pred = merged_eval[pred_col].tolist()
+        mf1 = macro_f1(y_true, y_pred)
+        acc = (merged_eval["gold_label"] == merged_eval[pred_col]).mean()
+        print(f"===== {tag} =====")
+        print(f"n={len(merged_eval)} acc={acc:.4f} macro_f1={mf1:.4f}")
+        print(classification_report(y_true, y_pred, labels=LABELS, digits=4))
+        cm = confusion_matrix(y_true, y_pred, labels=LABELS)
+        print(f"Confusion (rows=true, cols=pred) {LABELS}:\n{cm}\n")
+
+    report("TFIDF RAW", "pred_raw")
+    report("TFIDF CLEANED_V1", "pred_clean")
+
+    # by-domain table
+    if "domain" in merged_eval.columns:
+        rows = []
+        for dom in sorted(merged_eval["domain"].astype(str).unique()):
+            sub = merged_eval[merged_eval["domain"].astype(str) == dom]
+            rows.append(
+                {
+                    "domain": dom,
+                    "n": int(len(sub)),
+                    "macro_f1_raw": macro_f1(sub["gold_label"], sub["pred_raw"]),
+                    "macro_f1_clean": macro_f1(sub["gold_label"], sub["pred_clean"]),
+                    "error_rate_raw": float((sub["gold_label"] != sub["pred_raw"]).mean()),
+                    "error_rate_clean": float((sub["gold_label"] != sub["pred_clean"]).mean()),
+                }
+            )
+        dom_df = pd.DataFrame(rows)
+        out_dom = data_dir / "domain_metrics_tfidf_raw_clean.csv"
+        dom_df.to_csv(out_dom, index=False, encoding="utf-8")
+        print(f"Saved: {out_dom}")
+
+    out_merged = data_dir / "gold267_merged_tfidf_raw_clean.csv"
+    merged_eval.to_csv(out_merged, index=False, encoding="utf-8")
+    print(f"Saved merged: {out_merged}")
+
+
+if __name__ == "__main__":
+    main()

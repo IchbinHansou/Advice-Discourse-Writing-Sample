@@ -1,0 +1,104 @@
+
+from __future__ import annotations
+import re
+from pathlib import Path
+import pandas as pd
+
+
+def project_root() -> Path:
+    return Path(__file__).resolve().parents[1]
+
+
+def read_gold(path: Path) -> pd.DataFrame:
+    if path.suffix.lower() in [".xlsx", ".xls"]:
+        return pd.read_excel(path)
+    return pd.read_csv(path, low_memory=False)
+
+
+def load_regex_lines(regex_path: Path) -> list[re.Pattern]:
+    pats = []
+    for raw in regex_path.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        pats.append(re.compile(line, flags=re.IGNORECASE | re.MULTILINE))
+    return pats
+
+
+def apply_regex_v1(text: str, pats: list[re.Pattern]) -> str:
+    t = text or ""
+    for p in pats:
+        t = p.sub(" ", t)
+    t = re.sub(r"\s+", " ", t).strip()
+    return t
+
+
+def coverage(series: pd.Series, pattern: re.Pattern) -> float:
+    s = series.fillna("").astype(str).str.lower()
+    return float(s.apply(lambda x: bool(pattern.search(x))).mean())
+
+
+def main():
+    root = project_root()
+    gold_path = root / "data_new" / "gold_raw_norm_FROZEN.csv"
+    silver_path = root / "data_new" / "silver_train_raw_norm_FROZEN.csv"
+    regex_path = root / "spec" / "regex_v1.txt"
+
+    gold = read_gold(gold_path)
+    silver = pd.read_csv(silver_path, low_memory=False)
+
+    # use text columns
+    gold_text = gold["text"].fillna("").astype(str)
+    silver_text = silver["text"].fillna("").astype(str)
+
+    regex_pats = load_regex_lines(regex_path)
+    gold_clean = gold_text.apply(lambda x: apply_regex_v1(x, regex_pats))
+    silver_clean = silver_text.apply(lambda x: apply_regex_v1(x, regex_pats))
+
+    # A set of artifact families (text-level)
+    checks = {
+        "AITA_phrase": re.compile(r"\bam i the asshole\b|\bamitheasshole\b|\baita\b", re.I),
+        "Verdicts": re.compile(r"\b(yta|nta|esh|nah|info)\b", re.I),
+        "TLDR_EDIT_UPDATE": re.compile(r"\b(tl\s*;?\s*dr|tldr|edit|update)\b", re.I),
+        "Throwaway_Xpost": re.compile(r"\bthrowaway\b|\bx[\s-]?post\b|\bcrosspost\b|\brepost\b", re.I),
+        "AgeGender_bracket": re.compile(r"\[\s*\d{1,2}\s*[mf]\s*\]|\b\d{1,2}\s*[mf]\b", re.I),
+    }
+
+    def report_block(name: str, raw: pd.Series, clean: pd.Series):
+        rows = []
+        for k, pat in checks.items():
+            rows.append({
+                "check": k,
+                "raw_coverage": coverage(raw, pat),
+                "cleaned_v1_coverage": coverage(clean, pat),
+                "delta(clean-raw)": coverage(clean, pat) - coverage(raw, pat),
+            })
+        df = pd.DataFrame(rows).sort_values("raw_coverage", ascending=False)
+        print(f"\n=== {name} ===")
+        print(df.to_string(index=False))
+
+        changed = (raw.str.strip() != clean.str.strip()).mean()
+        print(f"\n{name}: fraction of rows changed by regex_v1 = {changed:.3f}")
+
+        # show a few examples that changed (sanity)
+        idx = (raw.str.strip() != clean.str.strip())
+        ex = pd.DataFrame({"raw": raw[idx].head(5), "cleaned": clean[idx].head(5)})
+        print(f"\n{name}: examples (first 5 changed rows):")
+        
+        
+        for i, r in ex.iterrows():
+            print("\n--- RAW ---")
+            print(r["raw"][:400])
+            print("--- CLEANED ---")
+            print(r["cleaned"][:400])
+
+    report_block("GOLD", gold_text, gold_clean)
+    report_block("SILVER", silver_text, silver_clean)
+
+    out = root / "data_new" / "artifact_text_audit.csv"
+    # save the coverage table for documentation
+    print(f"\nDone. (If you want, we can also save tables to {out})")
+
+
+if __name__ == "__main__":
+    main()

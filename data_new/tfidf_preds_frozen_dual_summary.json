@@ -1,0 +1,71 @@
+{
+  "raw": {
+    "overall": {
+      "n": 278,
+      "macro_f1": 0.6291076771628046
+    },
+    "by_domain": {
+      "aita": {
+        "n": 92,
+        "macro_f1": 0.44366284092311487,
+        "label_counts": {
+          "STORY": 64,
+          "ADVICE": 28
+        }
+      },
+      "confession": {
+        "n": 88,
+        "macro_f1": 0.47533875338753384,
+        "label_counts": {
+          "STORY": 58,
+          "ADVICE": 30
+        }
+      },
+      "ra": {
+        "n": 98,
+        "macro_f1": 0.4827846192510681,
+        "label_counts": {
+          "ADVICE": 89,
+          "STORY": 9
+        }
+      }
+    }
+  },
+  "clean": {
+    "overall": {
+      "n": 278,
+      "macro_f1": 0.6252009333679025
+    },
+    "by_domain": {
+      "aita": {
+        "n": 92,
+        "macro_f1": 0.43957115009746595,
+        "label_counts": {
+          "STORY": 64,
+          "ADVICE": 28
+        }
+      },
+      "confession": {
+        "n": 88,
+        "macro_f1": 0.4996446339729922,
+        "label_counts": {
+          "STORY": 58,
+          "ADVICE": 30
+        }
+      },
+      "ra": {
+        "n": 98,
+        "macro_f1": 0.47771317829457366,
+        "label_counts": {
+          "ADVICE": 89,
+          "STORY": 9
+        }
+      }
+    }
+  },
+  "pred_label_mismatches_raw_vs_clean": 5,
+  "files": {
+    "raw": "C:\\Users\\PC\\OneDrive\\\u684c\u9762\\Saarland Writing Sample\\data_new\\preds_tfidf_raw_FROZEN.csv",
+    "clean": "C:\\Users\\PC\\OneDrive\\\u684c\u9762\\Saarland Writing Sample\\data_new\\preds_tfidf_clean_FROZEN.csv"
+  }
+}

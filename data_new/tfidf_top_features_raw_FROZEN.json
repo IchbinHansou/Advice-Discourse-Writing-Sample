@@ -1,0 +1,512 @@
+{
+  "classes": [
+    "ADVICE",
+    "STORY"
+  ],
+  "positive_class": "STORY",
+  "negative_class": "ADVICE",
+  "top_toward_positive": [
+    {
+      "feature": "was",
+      "weight": 2.0643581081750466,
+      "toward": "STORY"
+    },
+    {
+      "feature": "my",
+      "weight": 1.9811092147213278,
+      "toward": "STORY"
+    },
+    {
+      "feature": "you",
+      "weight": 1.8474306987154996,
+      "toward": "STORY"
+    },
+    {
+      "feature": "the",
+      "weight": 1.8390021866244628,
+      "toward": "STORY"
+    },
+    {
+      "feature": "people",
+      "weight": 1.5961054333305666,
+      "toward": "STORY"
+    },
+    {
+      "feature": "fucking",
+      "weight": 1.4685700103379302,
+      "toward": "STORY"
+    },
+    {
+      "feature": "life",
+      "weight": 1.223878538361777,
+      "toward": "STORY"
+    },
+    {
+      "feature": "of",
+      "weight": 1.2087228035132764,
+      "toward": "STORY"
+    },
+    {
+      "feature": "amp",
+      "weight": 1.1563605165399533,
+      "toward": "STORY"
+    },
+    {
+      "feature": "wish",
+      "weight": 0.9803809751026946,
+      "toward": "STORY"
+    },
+    {
+      "feature": "it",
+      "weight": 0.9753436688222176,
+      "toward": "STORY"
+    },
+    {
+      "feature": "hate",
+      "weight": 0.970879095918287,
+      "toward": "STORY"
+    },
+    {
+      "feature": "fuck",
+      "weight": 0.9096234546168047,
+      "toward": "STORY"
+    },
+    {
+      "feature": "myself",
+      "weight": 0.9033029903685977,
+      "toward": "STORY"
+    },
+    {
+      "feature": "in my",
+      "weight": 0.7565800911202984,
+      "toward": "STORY"
+    },
+    {
+      "feature": "my mom",
+      "weight": 0.7515416370413371,
+      "toward": "STORY"
+    },
+    {
+      "feature": "shit",
+      "weight": 0.74651993871801,
+      "toward": "STORY"
+    },
+    {
+      "feature": "in",
+      "weight": 0.7367583646459832,
+      "toward": "STORY"
+    },
+    {
+      "feature": "they",
+      "weight": 0.7337899956424634,
+      "toward": "STORY"
+    },
+    {
+      "feature": "brother",
+      "weight": 0.7239896443856907,
+      "toward": "STORY"
+    },
+    {
+      "feature": "just",
+      "weight": 0.7115518932638523,
+      "toward": "STORY"
+    },
+    {
+      "feature": "my life",
+      "weight": 0.7064673654813162,
+      "toward": "STORY"
+    },
+    {
+      "feature": "never",
+      "weight": 0.6970670912235164,
+      "toward": "STORY"
+    },
+    {
+      "feature": "one",
+      "weight": 0.6863480800991363,
+      "toward": "STORY"
+    },
+    {
+      "feature": "world",
+      "weight": 0.6744850004522032,
+      "toward": "STORY"
+    },
+    {
+      "feature": "my mother",
+      "weight": 0.651743061786071,
+      "toward": "STORY"
+    },
+    {
+      "feature": "all",
+      "weight": 0.6514660992121483,
+      "toward": "STORY"
+    },
+    {
+      "feature": "post",
+      "weight": 0.6229841092377026,
+      "toward": "STORY"
+    },
+    {
+      "feature": "my brother",
+      "weight": 0.6110872489926227,
+      "toward": "STORY"
+    },
+    {
+      "feature": "have to",
+      "weight": 0.6044234594646766,
+      "toward": "STORY"
+    },
+    {
+      "feature": "when was",
+      "weight": 0.579982655229795,
+      "toward": "STORY"
+    },
+    {
+      "feature": "car",
+      "weight": 0.574950455234678,
+      "toward": "STORY"
+    },
+    {
+      "feature": "amp x200b",
+      "weight": 0.5674070792882243,
+      "toward": "STORY"
+    },
+    {
+      "feature": "you re",
+      "weight": 0.5598009366473219,
+      "toward": "STORY"
+    },
+    {
+      "feature": "mom",
+      "weight": 0.5530687009525886,
+      "toward": "STORY"
+    },
+    {
+      "feature": "lost",
+      "weight": 0.5517016771139898,
+      "toward": "STORY"
+    },
+    {
+      "feature": "scared",
+      "weight": 0.5513077399121274,
+      "toward": "STORY"
+    },
+    {
+      "feature": "if you",
+      "weight": 0.5506286341955324,
+      "toward": "STORY"
+    },
+    {
+      "feature": "could",
+      "weight": 0.5346160778587478,
+      "toward": "STORY"
+    },
+    {
+      "feature": "no",
+      "weight": 0.5328893661462631,
+      "toward": "STORY"
+    },
+    {
+      "feature": "sister",
+      "weight": 0.5288965248307296,
+      "toward": "STORY"
+    },
+    {
+      "feature": "into",
+      "weight": 0.525443175475274,
+      "toward": "STORY"
+    },
+    {
+      "feature": "had",
+      "weight": 0.5198597216133779,
+      "toward": "STORY"
+    },
+    {
+      "feature": "cat",
+      "weight": 0.5175085397988703,
+      "toward": "STORY"
+    },
+    {
+      "feature": "off my",
+      "weight": 0.5019008706416993,
+      "toward": "STORY"
+    },
+    {
+      "feature": "my dad",
+      "weight": 0.4970743898002534,
+      "toward": "STORY"
+    },
+    {
+      "feature": "of my",
+      "weight": 0.4968648984563678,
+      "toward": "STORY"
+    },
+    {
+      "feature": "to",
+      "weight": 0.4912145529807462,
+      "toward": "STORY"
+    },
+    {
+      "feature": "today",
+      "weight": 0.4866202671103869,
+      "toward": "STORY"
+    },
+    {
+      "feature": "dog",
+      "weight": 0.4788258828235722,
+      "toward": "STORY"
+    }
+  ],
+  "top_toward_negative": [
+    {
+      "feature": "he",
+      "weight": -3.6426655482651014,
+      "toward": "ADVICE"
+    },
+    {
+      "feature": "she",
+      "weight": -2.990065254109369,
+      "toward": "ADVICE"
+    },
+    {
+      "feature": "we",
+      "weight": -2.591546120508986,
+      "toward": "ADVICE"
+    },
+    {
+      "feature": "relationship",
+      "weight": -2.4934769903372866,
+      "toward": "ADVICE"
+    },
+    {
+      "feature": "her",
+      "weight": -2.2237336720769894,
+      "toward": "ADVICE"
+    },
+    {
+      "feature": "him",
+      "weight": -1.6921310928618096,
+      "toward": "ADVICE"
+    },
+    {
+      "feature": "together",
+      "weight": -1.4138604235536507,
+      "toward": "ADVICE"
+    },
+    {
+      "feature": "advice",
+      "weight": -1.3851128468809395,
+      "toward": "ADVICE"
+    },
+    {
+      "feature": "boyfriend",
+      "weight": -1.3403874303314967,
+      "toward": "ADVICE"
+    },
+    {
+      "feature": "partner",
+      "weight": -1.279636382485774,
+      "toward": "ADVICE"
+    },
+    {
+      "feature": "his",
+      "weight": -1.2780358238466245,
+      "toward": "ADVICE"
+    },
+    {
+      "feature": "do",
+      "weight": -1.219725823050924,
+      "toward": "ADVICE"
+    },
+    {
+      "feature": "bf",
+      "weight": -1.2171983713648744,
+      "toward": "ADVICE"
+    },
+    {
+      "feature": "our",
+      "weight": -1.1824084709404308,
+      "toward": "ADVICE"
+    },
+    {
+      "feature": "dating",
+      "weight": -1.179536808970213,
+      "toward": "ADVICE"
+    },
+    {
+      "feature": "with",
+      "weight": -1.1182528436961827,
+      "toward": "ADVICE"
+    },
+    {
+      "feature": "should",
+      "weight": -1.115753206669256,
+      "toward": "ADVICE"
+    },
+    {
+      "feature": "is",
+      "weight": -1.1007076421737083,
+      "toward": "ADVICE"
+    },
+    {
+      "feature": "christmas",
+      "weight": -1.077087697803289,
+      "toward": "ADVICE"
+    },
+    {
+      "feature": "my boyfriend",
+      "weight": -1.0648821473369479,
+      "toward": "ADVICE"
+    },
+    {
+      "feature": "have been",
+      "weight": -1.0606336961042564,
+      "toward": "ADVICE"
+    },
+    {
+      "feature": "gf",
+      "weight": -0.971166706171123,
+      "toward": "ADVICE"
+    },
+    {
+      "feature": "how do",
+      "weight": -0.9595092463229364,
+      "toward": "ADVICE"
+    },
+    {
+      "feature": "also",
+      "weight": -0.9538001402800748,
+      "toward": "ADVICE"
+    },
+    {
+      "feature": "said",
+      "weight": -0.9510117348979715,
+      "toward": "ADVICE"
+    },
+    {
+      "feature": "months",
+      "weight": -0.9357872624476526,
+      "toward": "ADVICE"
+    },
+    {
+      "feature": "ex",
+      "weight": -0.9133019030339891,
+      "toward": "ADVICE"
+    },
+    {
+      "feature": "sex",
+      "weight": -0.865356586049763,
+      "toward": "ADVICE"
+    },
+    {
+      "feature": "been",
+      "weight": -0.8587016536803178,
+      "toward": "ADVICE"
+    },
+    {
+      "feature": "girl",
+      "weight": -0.8582735954373714,
+      "toward": "ADVICE"
+    },
+    {
+      "feature": "has",
+      "weight": -0.8172953924489511,
+      "toward": "ADVICE"
+    },
+    {
+      "feature": "the relationship",
+      "weight": -0.7996870667849503,
+      "toward": "ADVICE"
+    },
+    {
+      "feature": "me",
+      "weight": -0.7849338082137192,
+      "toward": "ADVICE"
+    },
+    {
+      "feature": "any advice",
+      "weight": -0.7828773153344876,
+      "toward": "ADVICE"
+    },
+    {
+      "feature": "we ve",
+      "weight": -0.7640610877119193,
+      "toward": "ADVICE"
+    },
+    {
+      "feature": "we have",
+      "weight": -0.7631378978761243,
+      "toward": "ADVICE"
+    },
+    {
+      "feature": "feelings",
+      "weight": -0.7627446246987729,
+      "toward": "ADVICE"
+    },
+    {
+      "feature": "men",
+      "weight": -0.7416042702748559,
+      "toward": "ADVICE"
+    },
+    {
+      "feature": "and he",
+      "weight": -0.7333404698319091,
+      "toward": "ADVICE"
+    },
+    {
+      "feature": "friends",
+      "weight": -0.732886366177905,
+      "toward": "ADVICE"
+    },
+    {
+      "feature": "my partner",
+      "weight": -0.7275580017684593,
+      "toward": "ADVICE"
+    },
+    {
+      "feature": "what do",
+      "weight": -0.7225743510119744,
+      "toward": "ADVICE"
+    },
+    {
+      "feature": "girlfriend",
+      "weight": -0.7196990103412495,
+      "toward": "ADVICE"
+    },
+    {
+      "feature": "our relationship",
+      "weight": -0.7071935668767056,
+      "toward": "ADVICE"
+    },
+    {
+      "feature": "says",
+      "weight": -0.6959383694718164,
+      "toward": "ADVICE"
+    },
+    {
+      "feature": "not",
+      "weight": -0.6834721658323001,
+      "toward": "ADVICE"
+    },
+    {
+      "feature": "phone",
+      "weight": -0.6793327522840352,
+      "toward": "ADVICE"
+    },
+    {
+      "feature": "situation",
+      "weight": -0.6694483850052593,
+      "toward": "ADVICE"
+    },
+    {
+      "feature": "my gf",
+      "weight": -0.6678670798788078,
+      "toward": "ADVICE"
+    },
+    {
+      "feature": "or",
+      "weight": -0.6674642865775665,
+      "toward": "ADVICE"
+    }
+  ]
+}
